@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parsePatchYaml } from '../src/yaml.mjs';
@@ -57,6 +57,20 @@ test('patch-writer managed 段：创建/更新/保留用户内容', () => {
   text = readFileSync(p, 'utf8');
   assert.ok(!text.includes('- id: r1'));
   assert.ok(text.includes('# my comment'), '用户内容保留');
+  // S1：仅含 managed 段的文件清空后应被删除（注释-only 会被 dsh 拒绝）
+  const p3 = join(dir, 'cordis3.patch.yml');
+  writeManaged(p3, ['r9']);
+  assert.ok(existsSync(p3));
+  writeManaged(p3, []);
+  assert.ok(!existsSync(p3), '仅含 managed 段的文件在清空后删除');
+  // S1：含用户内容的文件清空后保留用户内容、移除 managed 段
+  const p4 = join(dir, 'cordis4.patch.yml');
+  writeFileSync(p4, '# user\n- id: keep\n  disabled: false\n');
+  writeManaged(p4, ['r9']);
+  writeManaged(p4, []);
+  const t4 = readFileSync(p4, 'utf8');
+  assert.ok(t4.includes('# user') && t4.includes('- id: keep'), '用户内容保留');
+  assert.ok(!t4.includes(MANAGED_START), 'managed 段已移除');
   // 空集合 + 文件不存在 → 不创建文件
   const p2 = join(dir, 'cordis2.patch.yml');
   writeManaged(p2, []);
@@ -79,5 +93,11 @@ test('inferFailures 从 stderr 归因行', () => {
   assert.deepEqual(inferFailures('boom @y/b failed', rows), ['b']);
   assert.deepEqual(inferFailures('boom id: a', rows), ['a']);
   assert.deepEqual(inferFailures('boom x', rows), []);
+  // S4：公共前缀/子串不应误报
+  const rows2 = [{ id: 'a', name: '@x/a' }, { id: 'ab', name: '@x/ab' }];
+  assert.deepEqual(inferFailures('boom @x/ab failed', rows2), ['ab'], '短名 a 不应命中 @x/ab');
+  assert.deepEqual(inferFailures('boom @x/a/b failed', rows2), [], '路径后缀不应命中');
+  assert.deepEqual(inferFailures('line1\n@x/a: apply failed', rows2), ['a'], '行首 name: 格式命中');
+
   assert.deepEqual(inferFailures('nothing', rows), []);
 });

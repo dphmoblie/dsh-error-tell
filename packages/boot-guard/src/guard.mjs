@@ -16,14 +16,23 @@ export function assertDisableLimit(toDisable, maxDisable, log = () => {}) {
   }
 }
 
-/** 从 stderr 推断失败行：行名或行 id 出现在输出中即命中。 */
+function escapeRegExp(s) { return s.replace(/\$/g, '\\$').replace(/[.*+?^{}()|[\]\\]/g, '\\$&'); }
+
+/**
+ * 从 stderr 推断失败行（精确匹配，防误杀）：
+ * 1) 行首 `<name>:`（assertEntriesActivated 的 failures 行格式）；
+ * 2) 包名带边界出现（引号/空白/括号/路径分隔符包围）；
+ * 3) 显式 id 引用（id: X / entry X / "X"）。
+ */
 export function inferFailures(stderr, rows) {
+  const s = stderr || '';
   const hits = new Set();
   for (const row of rows) {
     if (!row.id || !row.name || SELF_IDS.has(row.id)) continue;
-    const s = stderr || "";
-    if (s.includes(row.name)) { hits.add(row.id); continue; }
-    if (s.includes("id: " + row.id) || s.includes("entry " + row.id) || s.includes("\"" + row.id + "\"")) hits.add(row.id);
+    const n = escapeRegExp(row.name);
+    if (new RegExp('(?:^|[\\r\\n])' + n + ':').test(s)) { hits.add(row.id); continue; }
+    if (new RegExp('(?:^|[\\s"\'/(])' + n + '(?=[\\s"\':)])').test(s)) { hits.add(row.id); continue; }
+    if (s.includes('id: ' + row.id) || s.includes('entry ' + row.id) || s.includes('"' + row.id + '"')) hits.add(row.id);
   }
   return [...hits];
 }
