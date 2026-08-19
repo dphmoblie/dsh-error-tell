@@ -175,6 +175,9 @@ export async function guard(opts = {}) {
       if (attempt === restartLimit) break;
       if (!newFailures.length) { log('[dsh-error-tell] 无法从 stderr 归因失败行，熔断不循环'); break; }
     }
+    if (last && !(last.quit || (last.code !== null && NORMAL_EXITS.has(last.code)))) {
+      log('[dsh-error-tell] 重启次数用尽（attempts=' + attempts + '），web 仍未正常启动；本次归因: ' + (newFailures.length ? newFailures.join(', ') : '（无归因，见上方 stderr）') + '；请人工检查配置');
+    }
     return { rows, issues, toDisable: [...toDisableNow], probeIds: [...probeIds], spawn: last, attempts, disabled: [...toDisableNow] };
   } finally {
     if (probePatchFile) try { unlinkSync(probePatchFile); } catch { /* 忽略 */ }

@@ -30,7 +30,7 @@
   - G: 多坏插件（import + apply）一次清理（25s quit 窗口）
   - H: apply 挂起 → 进程级 timeout → 熔断不循环（exit 5，零配置修改）
   - 注：pending（缺注入服务）在宿主侧不阻断启动（Cordis 静默不激活），已用幂等性验收替代
-- 单元测试：7 ✔ / 0 ✖（yaml !!js 容错、quarantine、patch-writer、assertDisableLimit 熔断、inferFailures、注入脚本 VM 测试 ×2）
+- 单元测试：14 ✔ / 0 ✖（含 runtime-guard recordFailure/countManaged、注入脚本恢复面板）
 - 真实 profile 冒烟：153 行组合解析成功，静态检查 0 问题（只读，不写配置）
 
 ## S2（连续失败 + 探针恢复 + 管理面板）

@@ -49,7 +49,7 @@ export async function runChecks(rows, { profileDir, dshInstall, timeoutMs = 2000
   const seen = new Set();
   for (const row of rows) {
     if (!row || typeof row !== 'object' || !row.id) {
-      issues.push({ severity: 'error', stage: 'config', rowId: String(row?.id ?? '?'), message: '行缺少 id' });
+      issues.push({ severity: 'warn', stage: 'config', rowId: String(row?.id ?? '?'), message: '行缺少 id（配置问题，跳过禁用路径）' });
       continue;
     }
     if (seen.has(row.id)) issues.push({ severity: 'error', stage: 'config', rowId: row.id, message: '重复的行 id' });

@@ -6,8 +6,7 @@
   "main": "./src/host.mjs",
   "exports": {
     ".": "./src/host.mjs",
-    "./host": "./src/host.mjs",
-    "./client": "./src/client.js"
+    "./host": "./src/host.mjs"
   },
   "dsh": {
     "bundle": {

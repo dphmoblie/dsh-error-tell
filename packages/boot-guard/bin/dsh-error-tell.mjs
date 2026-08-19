@@ -32,6 +32,14 @@ const usage = [
 ].join('\n');
 if (values.help) { console.log(usage); process.exit(0); }
 
+function numOption(name, value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    console.error('参数错误: --' + name + ' 需要非负数字，得到 ' + JSON.stringify(value));
+    process.exit(2);
+  }
+  return n;
+}
 const cmd = positionals[0] ?? 'guard';
 const home = dshHome();
 
@@ -42,13 +50,13 @@ if (cmd === 'guard') {
     profile: values.profile,
     patchFiles: values.patch,
     dryRun: values["dry-run"],
-    restartLimit: Number(values["restart-limit"] || 2),
-    maxDisable: Number(values["max-disable"] || 50),
-    threshold: Number(values["fail-threshold"] || 2),
+    restartLimit: numOption('restart-limit', values["restart-limit"] || 2),
+    maxDisable: numOption('max-disable', values["max-disable"] || 50),
+    threshold: numOption('fail-threshold', values["fail-threshold"] || 2),
     importChecks: !values["no-import-checks"],
     dshBin: values.dsh,
-    timeoutMs: Number(values["timeout-ms"] || 120000),
-    port: values.port !== undefined ? Number(values.port) : 0,
+    timeoutMs: numOption('timeout-ms', values["timeout-ms"] || 120000),
+    port: values.port !== undefined ? numOption('port', values.port) : 0,
     quitAfterMs: Number(process.env.DSH_ERROR_TELL_QUIT_AFTER_MS || 0),
     env: process.env
   });
@@ -66,14 +74,16 @@ if (cmd === 'guard') {
 } else if (cmd === 'restore') {
   const rowId = positionals[1];
   if (!rowId) { console.error("用法: dsh-error-tell restore <rowId>"); process.exit(2); }
-  const hit = restoreQuarantine(home, rowId);
   const managed = readManaged(homePatchPath(home));
-  if (managed.ids.has(rowId)) {
+  const managedHit = managed.ids.has(rowId);
+  const ledgerHit = restoreQuarantine(home, rowId);
+  if (managedHit) {
     managed.ids.delete(rowId);
     const { writeManaged } = await import('../src/patch-writer.mjs');
     writeManaged(homePatchPath(home), managed.ids);
   }
-  console.log(hit ? "已恢复 " + rowId : "账本中无 " + rowId + " 的活动记录");
+  const hit = ledgerHit || managedHit; // L3：managed 有记录即视为恢复成功
+  console.log(hit ? "已恢复 " + rowId : "账本与 managed 段均无 " + rowId + " 的记录");
   process.exit(hit ? 0 : 3);
 } else if (cmd === 'status') {
   const ledger = loadLedger(home);

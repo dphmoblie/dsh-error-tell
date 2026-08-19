@@ -11,7 +11,9 @@ let failed = 0;
 function ok(cond, msg) { if (!cond) { failed++; console.error('✖ FAIL:', msg); } else console.log('✔', msg); }
 function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { ...opts, env: { ...process.env, ...(opts.env || {}) }, windowsHide: true, shell: true });
+    // L9：args + shell:true 会触发 Node DEP0190；拼接为命令串（参数加引号）
+    const cmdline = [cmd, ...args.map(a => '"' + String(a).replace(/"/g, '\\"') + '"')].join(' ');
+    const child = spawn(cmdline, { ...opts, env: { ...process.env, ...(opts.env || {}) }, windowsHide: true, shell: true });
     let out = '', err = '';
     const timer = setTimeout(() => { child.kill(); resolve({ code: null, stdout: out, stderr: err, timedOut: true }); }, opts.timeoutMs || 60000);
     child.stdout?.on('data', d => out += d);

@@ -20,9 +20,11 @@ const env = { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' };
 
 function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { ...opts, env: { ...env, ...(opts.env || {}) }, windowsHide: true, shell: true });
+    // L9：args + shell:true 触发 DEP0190；拼接为命令串
+    const cmdline = [cmd, ...args.map(a => '"' + String(a).replace(/"/g, '\\"') + '"')].join(' ');
+    const child = spawn(cmdline, { ...opts, env: { ...env, ...(opts.env || {}) }, windowsHide: true, shell: true });
     let out = '', err = '';
-    const timer = setTimeout(() => { child.kill(); resolve({ code: null, stdout: out, stderr: err, timedOut: true }); }, opts.timeoutMs || 120000);
+    const timer = setTimeout(() => { try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { child.kill(); } resolve({ code: null, stdout: out, stderr: err, timedOut: true }); }, opts.timeoutMs || 120000);
     child.stdout?.on('data', d => out += d);
     child.stderr?.on('data', d => err += d);
     child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout: out, stderr: err }); });

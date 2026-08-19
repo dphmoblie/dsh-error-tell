@@ -112,6 +112,7 @@ dsh-error-tell restore <rowId>
 - **web 管理面板**：正常页面自动显示被禁用插件列表，一键恢复（`/api/error-tell/status` + `/restore`）；
 - 重启循环有上限，无法从 stderr 归因时熔断不循环；
 - 所有自动改动都可审计、可 `restore` 回滚。
+- 说明：`dsh --dump-config` 预检会触发 dsh 自身的模块 heal（创建 `profiles/node_modules`），属 dsh 行为；guard 本身不写任何配置。
 
 ## 验证记录
 

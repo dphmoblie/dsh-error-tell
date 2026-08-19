@@ -11,14 +11,16 @@ export async function loadYaml() {
     cached = mod.default ?? mod;
   } catch (e) { errors.push("import: " + e.message); }
   if (!cached) {
-    const candidates = [
-      process.env.DSH_INSTALL,
-      'D:\\nvm\\nodejs\\node_modules\\@deepseek-ai\\dsh',
-      'D:\\nvm\\v26.0.0\\node_modules\\@deepseek-ai\\dsh'
-    ].filter(Boolean);
-    for (const c of candidates) {
-      try { cached = createRequire(join(c, "package.json"))("js-yaml"); break; }
-      catch (e) { errors.push(c + ": " + e.message); }
+    // L1：动态探测 dsh 安装位置（npm root -g），避免硬编码 Windows 路径
+    const candidates = [process.env.DSH_INSTALL];
+    try {
+      const { spawnSync } = await import('node:child_process');
+      const npmRoot = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['root', '-g'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+      if (npmRoot.status === 0 && npmRoot.stdout.trim()) candidates.push(join(npmRoot.stdout.trim(), '@deepseek-ai', 'dsh'));
+    } catch { /* 探测失败则跳过 */ }
+    for (const c of candidates.filter(Boolean)) {
+      try { cached = createRequire(join(c, 'package.json'))('js-yaml'); break; }
+      catch (e) { errors.push(c + ': ' + e.message); }
     }
   }
   if (!cached) throw new Error('js-yaml 不可用：' + errors.join(' | ') + '（可 pnpm add js-yaml 或设置 DSH_INSTALL）');
