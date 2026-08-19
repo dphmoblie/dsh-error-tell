@@ -7,7 +7,7 @@ import { parsePatchYaml } from '../src/yaml.mjs';
 import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger } from '../src/quarantine.mjs';
 import { readManaged, writeManaged } from '../src/patch-writer.mjs';
 import { MANAGED_START, MANAGED_END } from '../src/home.mjs';
-import { inferFailures } from '../src/guard.mjs';
+import { inferFailures, assertDisableLimit } from '../src/guard.mjs';
 
 test('parsePatchYaml 容忍 !!js 表达式（dump-config 形态）', async () => {
   const text = [
@@ -66,6 +66,11 @@ test('patch-writer managed 段：创建/更新/保留用户内容', () => {
   assert.ok(text.includes('# my comment'), '用户内容保留');
 });
 
+test('assertDisableLimit 熔断：超限抛错，限内通过', () => {
+  assert.throws(() => assertDisableLimit(new Set(['a', 'b']), 1), /熔断/);
+  assert.doesNotThrow(() => assertDisableLimit(new Set(['a', 'b']), 2));
+  assert.doesNotThrow(() => assertDisableLimit(new Set(), 50));
+});
 test('inferFailures 从 stderr 归因行', () => {
   const rows = [
     { id: 'a', name: '@x/a' },

@@ -214,7 +214,7 @@ writeFileSync(join(profileE, 'package.json'), JSON.stringify({
   dependencies: {},
   dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } }
 }, null, 2) + '\n', 'utf8');
-writeFileSync(join(profileE, 'cordis.patch.yml'), '# 干净 profile\n', 'utf8');
+// 不写 cordis.patch.yml：注释-only 的 patch 不是合法顶层数组，缺失即视为干净
 writeFileSync(join(profileE, 'cordis.yml'), '[]\n', 'utf8');
 const envE = { ...env, DSH_HOME: homeE };
 const instE = await run('pnpm', ['install', '--offline'], { cwd: profileE, timeoutMs: 90000 });

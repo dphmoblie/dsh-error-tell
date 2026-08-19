@@ -8,6 +8,14 @@ import { dshHome, homePatchPath } from './home.mjs';
 export const SELF_IDS = new Set(['error-tell-runtime', 'error-tell-client-host']);
 export const NORMAL_EXITS = new Set([0, 130, 143]);
 
+/** 熔断：单次待禁用行数超过上限时拒绝继续（防误杀），且不修改任何配置。 */
+export function assertDisableLimit(toDisable, maxDisable, log = () => {}) {
+  if (toDisable.size > maxDisable) {
+    log('[dsh-error-tell] 熔断：本次需禁用 ' + toDisable.size + ' 行（上限 ' + maxDisable + '），拒绝自动修改配置，请人工检查');
+    throw new Error('熔断：待禁用行数 ' + toDisable.size + ' 超过上限 ' + maxDisable + '（可能误判，未修改任何配置）');
+  }
+}
+
 /** 从 stderr 推断失败行：行名或行 id 出现在输出中即命中。 */
 export function inferFailures(stderr, rows) {
   const hits = new Set();
@@ -27,7 +35,7 @@ export function inferFailures(stderr, rows) {
 export async function guard(opts = {}) {
   const {
     profile = 'web', patchFiles = [], dryRun = false, restartLimit = 2,
-    dshBin = 'dsh', port = 0, extraArgs = [], timeoutMs = 120000,
+    dshBin = 'dsh', port = 0, extraArgs = [], timeoutMs = 120000, maxDisable = 50,
     env = process.env, profileDir, dshInstall, quitAfterMs = 0,
     log = (msg) => console.log(msg)
   } = opts;
@@ -46,6 +54,7 @@ export async function guard(opts = {}) {
   const toDisable = new Set(readManaged(homePatchPath(home)).ids);
   for (const e of activeQuarantine(home)) toDisable.add(e.rowId);
   for (const f of failures) toDisable.add(f.rowId);
+  assertDisableLimit(toDisable, maxDisable, log);
 
   if (dryRun) {
     for (const id of toDisable) log("  [plan] disable " + id);

@@ -10,6 +10,8 @@
   },
   "scripts": {
     "test": "node --test packages/boot-guard/test/*.test.mjs test/inject.test.mjs",
-    "e2e": "node test/e2e/run-e2e.mjs"
+    "e2e": "node test/e2e/run-e2e.mjs",
+    "e2e:cd": "node test/e2e/verify-cd.mjs",
+    "e2e:efg": "node test/e2e/verify-efg.mjs"
   }
 }

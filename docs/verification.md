@@ -22,13 +22,15 @@
 
 - 首次验证：13 ✔ / 0 ✖（Phase A）
 - 含 Phase B：17 ✔ / 0 ✖
-- 含 Phase C–G：约 40 ✔ / 0 ✖
+- 含 Phase C–H：全部 ✔ / 0 ✖
   - C: client-tell 注入 + 禁用端点 + 组合图排除（刷新恢复）
   - D: 宿主 import 失败被预检拦截（无需重启）
-  - E: pending（缺服务）被归因禁用并重启
+  - E: 幂等性——干净 profile 零副作用（无 home patch/账本产生）
   - F: YAML 损坏 → guard 友好失败（exit 6，不改配置）
-  - G: 多坏插件（import + apply）一次清理
-- 单元测试：6 ✔ / 0 ✖（yaml !!js 容错、quarantine、patch-writer、inferFailures、注入脚本 VM 测试 ×2）
+  - G: 多坏插件（import + apply）一次清理（25s quit 窗口）
+  - H: apply 挂起 → 进程级 timeout → 熔断不循环（exit 5，零配置修改）
+  - 注：pending（缺注入服务）在宿主侧不阻断启动（Cordis 静默不激活），已用幂等性验收替代
+- 单元测试：7 ✔ / 0 ✖（yaml !!js 容错、quarantine、patch-writer、assertDisableLimit 熔断、inferFailures、注入脚本 VM 测试 ×2）
 - 真实 profile 冒烟：153 行组合解析成功，静态检查 0 问题（只读，不写配置）
 
 ## 复现
