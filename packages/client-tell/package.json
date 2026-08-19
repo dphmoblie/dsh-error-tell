@@ -1,7 +1,6 @@
 {
   "name": "@dsh-error-tell/client-tell",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "main": "./src/host.mjs",
   "exports": {
@@ -14,7 +13,7 @@
     }
   },
   "dependencies": {
-    "@dsh-error-tell/boot-guard": "file:../boot-guard"
+    "@dsh-error-tell/boot-guard": "workspace:*"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.2.0"
@@ -23,5 +22,19 @@
     "@deepseek-ai/dsh": {
       "optional": true
     }
+  },
+  "description": "DSH web 加载页注入 + errorTell 端点：浏览器一键禁用/恢复问题插件",
+  "author": "dphmoblie",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dphmoblie/dsh-error-tell.git"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=20"
   }
 }

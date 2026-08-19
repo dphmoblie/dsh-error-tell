@@ -1,7 +1,6 @@
 {
   "name": "@dsh-error-tell/runtime-guard",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "main": "./src/index.mjs",
   "dsh": {
@@ -16,5 +15,19 @@
     "@deepseek-ai/dsh": {
       "optional": true
     }
+  },
+  "description": "DSH 宿主运行时看门狗：捕获兄弟插件失败并在进程退出前同步落盘禁用",
+  "author": "dphmoblie",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dphmoblie/dsh-error-tell.git"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=20"
   }
 }

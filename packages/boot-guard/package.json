@@ -1,7 +1,6 @@
 {
   "name": "@dsh-error-tell/boot-guard",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "bin": {
     "dsh-error-tell": "bin/dsh-error-tell.mjs"
@@ -11,5 +10,25 @@
   },
   "dependencies": {
     "js-yaml": "^4.1.0"
-  }
+  },
+  "description": "DSH 启动预检 + 重启包装：检测并持久化禁用问题插件，让 dsh web 正常打开",
+  "author": "dphmoblie",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dphmoblie/dsh-error-tell.git"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "plugin",
+    "guard",
+    "error-tell"
+  ]
 }
