@@ -1,8 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger } from '@dsh-error-tell/boot-guard';
-import { readManaged, writeManaged } from '@dsh-error-tell/boot-guard';
+import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged } from '@dsh-error-tell/core';
 import { INJECT_SCRIPT } from './inject-script.js';
 
 export const name = 'error-tell-client-host';

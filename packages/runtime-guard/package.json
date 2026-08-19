@@ -8,14 +8,6 @@
       "patch": "./cordis.patch.yml"
     }
   },
-  "peerDependencies": {
-    "@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.2.0"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh": {
-      "optional": true
-    }
-  },
   "description": "DSH 宿主运行时看门狗：捕获兄弟插件失败并在进程退出前同步落盘禁用",
   "author": "dphmoblie",
   "license": "MIT",
@@ -29,5 +21,8 @@
   ],
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@dsh-error-tell/core": "workspace:*"
   }
 }

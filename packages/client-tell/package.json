@@ -13,15 +13,7 @@
     }
   },
   "dependencies": {
-    "@dsh-error-tell/boot-guard": "workspace:*"
-  },
-  "peerDependencies": {
-    "@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.2.0"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh": {
-      "optional": true
-    }
+    "@dsh-error-tell/core": "workspace:*"
   },
   "description": "DSH web 加载页注入 + errorTell 端点：浏览器一键禁用/恢复问题插件",
   "author": "dphmoblie",

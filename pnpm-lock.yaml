@@ -10,17 +10,26 @@ importers:
 
   packages/boot-guard:
     dependencies:
+      '@dsh-error-tell/core':
+        specifier: workspace:*
+        version: link:../core
       js-yaml:
         specifier: ^4.1.0
         version: 4.3.1
 
   packages/client-tell:
     dependencies:
-      '@dsh-error-tell/boot-guard':
-        specifier: file:../boot-guard
-        version: link:../boot-guard
+      '@dsh-error-tell/core':
+        specifier: workspace:*
+        version: link:../core
 
-  packages/runtime-guard: {}
+  packages/core: {}
+
+  packages/runtime-guard:
+    dependencies:
+      '@dsh-error-tell/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/test-fixtures/bad-apply: {}
 

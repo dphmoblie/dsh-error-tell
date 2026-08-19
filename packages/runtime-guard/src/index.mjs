@@ -1,83 +1,15 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+// runtime-guard：宿主运行时看门狗。落盘逻辑统一复用 @dsh-error-tell/core（L4）。
+import { countManaged, recordFailure, readManaged, syncDisable, writeManaged } from '@dsh-error-tell/core';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
+
+export { countManaged, recordFailure, syncDisable } from '@dsh-error-tell/core'; // 单测兼容导出
 
 export const name = 'error-tell-runtime';
 export const inject = [];
 
 const SELF = 'error-tell-runtime';
 const FIBER_FAILED = 3;
-const MANAGED_START = '# --- dsh-error-tell managed (auto-generated; do not edit) ---';
-const MANAGED_END = '# --- end dsh-error-tell managed ---';
-
-/** 同步写账本（进程可能随时 fail-loud 退出，不能用异步 IO）。 */
-function syncLedger(home, entry) {
-  const ledgerPath = join(home, 'state', 'dsh-error-tell', 'quarantine.json');
-  let ledger = { version: 1, entries: [] };
-  try { ledger = JSON.parse(readFileSync(ledgerPath, 'utf8')); } catch { /* first write */ }
-  if (!Array.isArray(ledger.entries)) ledger.entries = [];
-  const existing = ledger.entries.find(e => e.rowId === entry.rowId && !e.restoredAt);
-  if (existing) Object.assign(existing, entry);
-  else ledger.entries.push({ ...entry, at: new Date().toISOString() });
-  mkdirSync(dirname(ledgerPath), { recursive: true });
-  writeFileSync(ledgerPath + '.tmp', JSON.stringify(ledger, null, 2) + '\n', 'utf8');
-  renameSync(ledgerPath + '.tmp', ledgerPath);
-}
-
-/** 当前 managed 段禁用行数（上限判定用）。 */
-export function countManaged(patchPath) {
-  let text = '';
-  try { text = readFileSync(patchPath, 'utf8'); } catch { return 0; }
-  const start = text.indexOf(MANAGED_START);
-  const end = text.indexOf(MANAGED_END);
-  if (start < 0 || end <= start) return 0;
-  let n = 0;
-  for (const line of text.slice(start + MANAGED_START.length, end).split(/\r?\n/)) {
-    if (/^\s*-\s*id:/.test(line)) n += 1;
-  }
-  return n;
-}
-
-/** 同步把 rowId 加入 managed 禁用段。 */
-export function syncDisable(patchPath, rowId) {
-  let text = "";
-  try { text = readFileSync(patchPath, 'utf8'); } catch { /* new file */ }
-  const start = text.indexOf(MANAGED_START);
-  const end = text.indexOf(MANAGED_END);
-  const ids = new Set();
-  if (start >= 0 && end > start) {
-    for (const line of text.slice(start + MANAGED_START.length, end).split(/\r?\n/)) {
-      const m = line.match(/^\s*-\s*id:\s*([^\s]+)/);
-      if (m) ids.add(m[1].replace(/['"]/g, ''));
-    }
-  }
-  ids.add(rowId);
-  const block = [MANAGED_START, ...[...ids].sort().map(id => '- id: ' + id + '\n  disabled: true'), MANAGED_END, ''].join('\n');
-  let next;
-  if (start >= 0 && end > start) {
-    next = text.slice(0, start) + block + text.slice(end + MANAGED_END.length);
-  } else {
-    next = text.replace(/\s*$/, '') + '\n\n' + block;
-  }
-  mkdirSync(dirname(patchPath), { recursive: true });
-  writeFileSync(patchPath + '.tmp', next, 'utf8');
-  renameSync(patchPath + '.tmp', patchPath);
-}
-
-/**
- * 记录一次失败并同步落盘（账本必写；managed 禁用受 maxDisable 熔断）。
- * 供 apply 与单测复用。
- */
-export function recordFailure(home, patchPath, { rowId, pkg, stage, error, source = 'runtime-guard', maxDisable = 50, log = () => {} }) {
-  if (!rowId) return false;
-  syncLedger(home, { rowId, package: pkg, stage, error: String(error).split("\n")[0], source });
-  if (countManaged(patchPath) >= maxDisable) {
-    log('[dsh-error-tell] 熔断：managed 禁用数已达上限 ' + maxDisable + '，跳过禁用 ' + rowId + '（账本已记录）');
-    return false;
-  }
-  syncDisable(patchPath, rowId);
-  return true;
-}
 
 export function apply(ctx) {
   const home = process.env.DSH_HOME || join(homedir(), '.dsh');

@@ -9,6 +9,7 @@
     ".": "./src/index.mjs"
   },
   "dependencies": {
+    "@dsh-error-tell/core": "workspace:*",
     "js-yaml": "^4.1.0"
   },
   "description": "DSH 启动预检 + 重启包装：检测并持久化禁用问题插件，让 dsh web 正常打开",
