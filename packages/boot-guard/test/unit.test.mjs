@@ -131,6 +131,9 @@ test('inferFailures 从 stderr 归因行', () => {
   assert.deepEqual(inferFailures('boom @x/ab failed', rows2), ['ab'], '短名 a 不应命中 @x/ab');
   assert.deepEqual(inferFailures('boom @x/a/b failed', rows2), [], '路径后缀不应命中');
   assert.deepEqual(inferFailures('line1\n@x/a: apply failed', rows2), ['a'], '行首 name: 格式命中');
+  // 事故修复：pending 行不归因（waiting for service 里的服务名不是插件名）
+  assert.deepEqual(inferFailures('@x/a: pending (waiting for service: typert)', rows2), [], 'pending 行被剔除');
+  assert.deepEqual(inferFailures('boom @x/a did not activate', rows2), [], 'did not activate 不归因');
 
   assert.deepEqual(inferFailures('nothing', rows), []);
 });

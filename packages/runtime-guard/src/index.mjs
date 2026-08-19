@@ -14,7 +14,7 @@ const FIBER_FAILED = 3;
 export function apply(ctx) {
   const home = process.env.DSH_HOME || join(homedir(), '.dsh');
   const patchPath = join(home, 'cordis.patch.yml');
-  const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 50);
+  const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 5);
   const seen = new Set();
 
   const record = (rowId, pkg, stage, error) => {

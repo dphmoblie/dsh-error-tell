@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged } from '@dsh-error-tell/core';
+import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged, isProtected } from '@dsh-error-tell/core';
 import { INJECT_SCRIPT } from './inject-script.js';
 
 export const name = 'error-tell-client-host';
@@ -31,7 +31,7 @@ export function apply(ctx) {
   const webServer = ctx.webServer;
   // M3：per-page 随机 token，注入脚本携带，端点校验（跨域页面无法读取）
   const token = process.env.DSH_ERROR_TELL_TOKEN || randomBytes(16).toString('hex');
-  const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 50);
+  const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 5);
 
   // 1) 加载页注入：禁用/恢复按钮脚本（独立于插件树）
   const disposeTap = webServer.tapIndex((html) => {
@@ -56,6 +56,7 @@ export function apply(ctx) {
       const found = resolveRow(ctx, rowId);
       if (!found) return json(res, 404, { ok: false, error: 'row not found: ' + rowId });
       if (found === SELF || String(found).startsWith('error-tell-')) return json(res, 403, { ok: false, error: 'refusing to disable self/guard row' });
+      if (isProtected(found, rowId)) return json(res, 403, { ok: false, error: 'refusing to disable protected core service: ' + found });
       try {
         addQuarantine(home, { rowId: found, package: rowId, stage: 'client', error: 'browser 手动禁用（client-tell）', source: 'client-tell' });
         const managed = readManaged(patchPath);

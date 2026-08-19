@@ -1,6 +1,6 @@
 {
   "name": "@dsh-error-tell/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "dsh-error-tell 共享内核：managed 补丁段读写 + 隔离账本 + 熔断记录（同步实现，供宿主/看门狗/浏览器宿主复用）",
   "type": "module",
   "main": "./src/index.mjs",
@@ -24,5 +24,8 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
   }
 }

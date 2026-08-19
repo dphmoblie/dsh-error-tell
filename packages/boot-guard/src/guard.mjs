@@ -6,6 +6,7 @@ import { runChecks } from './checks.mjs';
 import { loadLedger, addQuarantine, activeQuarantine, restoreQuarantine, failureCount } from './quarantine.mjs';
 import { readManaged, writeManaged } from './patch-writer.mjs';
 import { dshHome, homePatchPath } from './home.mjs';
+import { isProtected, isPendingLikeError, assertPatchParseable } from '@dsh-error-tell/core';
 
 export const SELF_IDS = new Set(['error-tell-runtime', 'error-tell-client-host']);
 export const NORMAL_EXITS = new Set([0, 130, 143]);
@@ -34,7 +35,8 @@ function escapeRegExp(s) { return s.replace(/\$/g, "\\$").replace(/[.*+?^{}()|[\
  * 3) 显式 id 引用（id: X / entry X / "X"）。
  */
 export function inferFailures(stderr, rows) {
-  const s = stderr || '';
+  // 事故修复：pending（依赖未满足）不是插件自身失败，相关行不参与归因
+  const s = (stderr || '').split(/\r?\n/).filter(l => !isPendingLikeError(l)).join('\n');
   const hits = new Set();
   for (const row of rows) {
     if (!row.id || !row.name || SELF_IDS.has(row.id)) continue;
@@ -64,12 +66,17 @@ export function writeProbePatch(ids, dir) {
 export async function guard(opts = {}) {
   const {
     profile = 'web', patchFiles = [], dryRun = false, restartLimit = 2,
-    dshBin = 'dsh', port = 0, extraArgs = [], timeoutMs = 120000, maxDisable = 50,
+    dshBin = 'dsh', port = 0, extraArgs = [], timeoutMs = 120000, maxDisable = 5,
     threshold = 2, importChecks = true, env = process.env, profileDir, dshInstall, quitAfterMs = 0,
     probe = true, log = (msg) => console.log(msg)
   } = opts;
   const home = dshHome(env);
   const patchPath = homePatchPath(home);
+  // 写前自检：home patch 必须可解析，否则拒绝任何 managed 写入
+  try { assertPatchParseable(patchPath); } catch (e) {
+    log('[dsh-error-tell] ' + e.message);
+    throw e;
+  }
   // M7：能力自检——记录 dsh 版本，便于私有 API 行为漂移时定位
   try {
     const v = await runDsh(dshBin, ['--version'], { env, timeoutMs: 20000 });
@@ -107,6 +114,11 @@ export async function guard(opts = {}) {
     for (const f of failures) {
       const prior = failureCount(home, f.rowId);
       const n = prior + 1;
+      if (isProtected(f.rowId, f.package)) {
+        log('  [第' + n + '次失败] ' + f.rowId + '（保护名单：只记账，绝不自动禁用）');
+        preFailures.push(f);
+        continue;
+      }
       const willDisable = decideDisable(1, prior, threshold);
       log('  [第' + n + '次失败] ' + f.rowId + (willDisable ? ' → 本次禁用' : '（观察中，未禁用）'));
       if (willDisable) toDisableNow.add(f.rowId);
@@ -165,7 +177,14 @@ export async function guard(opts = {}) {
       // 归因必须先于 restartLimit 判定：restart-limit 0 时失败也要记账/禁用
       newFailures = inferFailures(last.stderr || "", rows).filter(id => !toDisableNow.has(id));
       for (const id of newFailures) {
-        addQuarantine(home, { rowId: id, stage: 'runtime', error: 'dsh 启动失败（见 stderr）', source: 'boot-guard-restart' });
+        const row = rows.find(r2 => r2.id === id);
+        const pkgName = row?.name;
+        if (isProtected(id, pkgName)) {
+          addQuarantine(home, { rowId: id, package: pkgName, stage: 'runtime', error: 'dsh 启动失败（见 stderr）（保护名单未禁用）', source: 'boot-guard-restart-protected' });
+          log('[dsh-error-tell] ' + id + '（保护名单：只记账，绝不自动禁用）');
+          continue;
+        }
+        addQuarantine(home, { rowId: id, package: pkgName, stage: 'runtime', error: 'dsh 启动失败（见 stderr）', source: 'boot-guard-restart' });
         const n = failureCount(home, id);
         if (decideDisable(1, n - 1, threshold)) {
           toDisableNow.add(id);
