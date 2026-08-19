@@ -9,7 +9,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test packages/boot-guard/test/*.test.mjs",
+    "test": "node --test packages/boot-guard/test/*.test.mjs test/inject.test.mjs",
     "e2e": "node test/e2e/run-e2e.mjs"
   }
 }

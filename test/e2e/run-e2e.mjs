@@ -1,6 +1,6 @@
 // e2e：沙箱 DSH_HOME 全链路（坏插件 → 失败 → guard 禁用 → 重启成功 → restore）
 // 不触碰真实 ~/.dsh。
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -122,6 +122,153 @@ ok(!!rgLedger && rgLedger.entries.some(e2 => e2.rowId === 'fixture-bad-apply' &&
 let rgPatch = '';
 try { rgPatch = readFileSync(join(homeB, 'cordis.patch.yml'), 'utf8'); } catch { /* 未写 */ }
 ok(rgPatch.includes('- id: fixture-bad-apply') && rgPatch.includes('disabled: true'), '[B] runtime-guard 已写入 managed 禁用段');
+
+// ===== Phase C：client-tell —— 加载页注入 + 禁用端点 + 组合图排除 ===== 
+const PORT_C = 31880;
+const homeC = join(tmp, 'homeC');
+const profileC = join(homeC, 'profiles', 'web');
+mkdirSync(profileC, { recursive: true });
+writeFileSync(join(profileC, 'package.json'), JSON.stringify({
+  name: 'dsh-profile-web', private: true,
+  dependencies: {
+    '@dsh-error-tell/client-tell': 'file:' + join(ROOT, 'packages', 'client-tell').replaceAll('\\', '/'),
+    '@dsh-error-tell/fixture-bad-client': 'file:' + join(ROOT, 'packages', 'test-fixtures', 'bad-client').replaceAll('\\', '/')
+  },
+  dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@dsh-error-tell/client-tell'] } }
+}, null, 2) + '\n', 'utf8');
+writeFileSync(join(profileC, 'cordis.patch.yml'), [
+  '- insert:',
+    '    - id: fixture-bad-client',
+      "      name: '@dsh-error-tell/fixture-bad-client'",
+  ''
+].join('\n'), 'utf8');
+writeFileSync(join(profileC, 'cordis.yml'), '[]\n', 'utf8');
+const envC = { ...env, DSH_HOME: homeC };
+const instC = await run('pnpm', ['install', '--offline'], { cwd: profileC, timeoutMs: 90000 });
+ok(instC.code === 0, '[C] pnpm install（offline）exit=' + instC.code);
+const serverC = spawn('dsh', ['--profile', 'web', '--port', String(PORT_C)], { env: envC, windowsHide: true, shell: true });
+let serverOut = '', serverErr = '';
+serverC.stdout?.on('data', d => serverOut += d);
+serverC.stderr?.on('data', d => serverErr += d);
+let readyC = false;
+for (let i = 0; i < 60; i++) {
+  try { const r = await fetch('http://127.0.0.1:' + PORT_C + '/'); if (r.status === 200) { readyC = true; break; } } catch { /* 未就绪 */ }
+  await new Promise(r2 => setTimeout(r2, 1000));
+}
+ok(readyC, '[C] web 服务已就绪（宿主正常，坏的是浏览器侧 client bundle）');
+let html1 = '';
+try { html1 = await (await fetch('http://127.0.0.1:' + PORT_C + '/')).text(); } catch { /* 忽略 */ }
+ok(html1.includes('dsh-error-tell-inject'), '[C] 注入脚本已出现在 index.html');
+ok(html1.includes('fixture-bad-client'), '[C] __DSH_BOOT__ 含坏 client 行（浏览器将白屏失败）');
+const disableRes = await fetch('http://127.0.0.1:' + PORT_C + '/api/error-tell/disable', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-dsh-error-tell': '1' },
+  body: JSON.stringify({ rowId: '@dsh-error-tell/fixture-bad-client' })
+}).then(r => r.json()).catch(e => ({ error: e.message }));
+ok(disableRes.ok === true, '[C] 禁用端点返回 ok（' + JSON.stringify(disableRes) + '）');
+let html2 = '';
+for (let i = 0; i < 10; i++) {
+  await new Promise(r2 => setTimeout(r2, 1000));
+  try { html2 = await (await fetch('http://127.0.0.1:' + PORT_C + '/')).text(); } catch { /* 重试 */ }
+  if (!html2.includes('fixture-bad-client')) break;
+}
+ok(!html2.includes('fixture-bad-client'), '[C] 禁用后新页面 __DSH_BOOT__ 已排除坏 client 行（刷新即恢复正常）');
+const patchC = readFileSync(join(homeC, 'cordis.patch.yml'), 'utf8');
+ok(patchC.includes('- id: fixture-bad-client') && patchC.includes('disabled: true'), '[C] home patch 已禁用（source=client-tell）');
+const ledgerC = JSON.parse(readFileSync(join(homeC, 'state', 'dsh-error-tell', 'quarantine.json'), 'utf8'));
+ok(ledgerC.entries.some(e2 => e2.rowId === 'fixture-bad-client' && e2.source === 'client-tell'), '[C] 账本记录 source=client-tell');
+try { execFileSync('taskkill', ['/PID', String(serverC.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { serverC.kill(); }
+
+// ===== Phase D：宿主 import 失败 —— boot-guard 预检拦截（无需重启） =====
+const homeD = join(tmp, 'homeD');
+const profileD = join(homeD, 'profiles', 'web');
+mkdirSync(profileD, { recursive: true });
+writeFileSync(join(profileD, 'package.json'), JSON.stringify({
+  name: 'dsh-profile-web', private: true,
+  dependencies: { '@dsh-error-tell/fixture-bad-import': 'file:' + join(ROOT, 'packages', 'test-fixtures', 'bad-import').replaceAll('\\', '/') },
+  dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } }
+}, null, 2) + '\n', 'utf8');
+writeFileSync(join(profileD, 'cordis.patch.yml'), [
+  '- insert:',
+    '    - id: fixture-bad-import',
+      "      name: '@dsh-error-tell/fixture-bad-import'",
+  ''
+].join('\n'), 'utf8');
+writeFileSync(join(profileD, 'cordis.yml'), '[]\n', 'utf8');
+const envD = { ...env, DSH_HOME: homeD };
+const instD = await run('pnpm', ['install', '--offline'], { cwd: profileD, timeoutMs: 90000 });
+ok(instD.code === 0, '[D] pnpm install exit=' + instD.code);
+const dryD = await run('node', [BIN, 'guard', '--profile', 'web', '--dry-run'], { env: envD, timeoutMs: 60000 });
+ok(dryD.stdout.includes('[error/import] fixture-bad-import'), '[D] dry-run 预检发现 import 失败行');
+const gD = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envD, DSH_ERROR_TELL_QUIT_AFTER_MS: '12000' }, timeoutMs: 90000 });
+const jD = JSON.parse((gD.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
+ok(jD.ok === true && jD.attempts === 1, '[D] import 失败被预检拦截：无需重启直接正常启动（attempts=' + jD.attempts + '）');
+ok(jD.disabled.includes('fixture-bad-import'), '[D] 禁用列表含 fixture-bad-import');
+
+// ===== Phase E：pending（注入不存在的服务）=====
+const homeE = join(tmp, 'homeE');
+const profileE = join(homeE, 'profiles', 'web');
+mkdirSync(profileE, { recursive: true });
+writeFileSync(join(profileE, 'package.json'), JSON.stringify({
+  name: 'dsh-profile-web', private: true,
+  dependencies: { '@dsh-error-tell/fixture-bad-pending': 'file:' + join(ROOT, 'packages', 'test-fixtures', 'bad-pending').replaceAll('\\', '/') },
+  dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } }
+}, null, 2) + '\n', 'utf8');
+writeFileSync(join(profileE, 'cordis.patch.yml'), [
+  '- insert:',
+    '    - id: fixture-bad-pending',
+      "      name: '@dsh-error-tell/fixture-bad-pending'",
+  ''
+].join('\n'), 'utf8');
+writeFileSync(join(profileE, 'cordis.yml'), '[]\n', 'utf8');
+const envE = { ...env, DSH_HOME: homeE };
+const instE = await run('pnpm', ['install', '--offline'], { cwd: profileE, timeoutMs: 90000 });
+ok(instE.code === 0, '[E] pnpm install exit=' + instE.code);
+const gE = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envE, DSH_ERROR_TELL_QUIT_AFTER_MS: '12000' }, timeoutMs: 90000 });
+const jE = JSON.parse((gE.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
+ok(jE.ok === true && jE.attempts >= 2, '[E] pending 行被 stderr 归因禁用并重启成功（attempts=' + jE.attempts + '）');
+ok(jE.disabled.includes('fixture-bad-pending'), '[E] 禁用列表含 fixture-bad-pending');
+
+// ===== Phase F：home patch YAML 损坏 —— guard 友好失败，不改配置 =====
+const homeF = join(tmp, 'homeF');
+mkdirSync(join(homeF, 'profiles'), { recursive: true });
+writeFileSync(join(homeF, 'cordis.patch.yml'), '::::broken::::\n', 'utf8');
+const envF = { ...env, DSH_HOME: homeF };
+const gF = await run('node', [BIN, 'guard', '--profile', 'web'], { env: envF, timeoutMs: 60000 });
+ok(gF.code === 6, '[F] YAML 损坏时 guard 退出码 6（' + gF.code + '）');
+ok((gF.stderr + gF.stdout).includes('guard 失败'), '[F] 输出友好错误信息');
+ok(!existsSync(join(homeF, 'state', 'dsh-error-tell', 'quarantine.json')), '[F] 未写隔离账本（不改配置）');
+
+// ===== Phase G：多坏插件（import + apply）一次清理 ===== 
+const homeG = join(tmp, 'homeG');
+const profileG = join(homeG, 'profiles', 'web');
+mkdirSync(profileG, { recursive: true });
+writeFileSync(join(profileG, 'package.json'), JSON.stringify({
+  name: 'dsh-profile-web', private: true,
+  dependencies: {
+    '@dsh-error-tell/fixture-bad-import': 'file:' + join(ROOT, 'packages', 'test-fixtures', 'bad-import').replaceAll('\\', '/'),
+    '@dsh-error-tell/fixture-bad-apply': 'file:' + FIXTURE.replaceAll('\\', '/')
+  },
+  dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } }
+}, null, 2) + '\n', 'utf8');
+writeFileSync(join(profileG, 'cordis.patch.yml'), [
+  '- insert:',
+    '    - id: fixture-bad-import',
+      "      name: '@dsh-error-tell/fixture-bad-import'",
+    '    - id: fixture-bad-apply',
+      "      name: '@dsh-error-tell/fixture-bad-apply'",
+  ''
+].join('\n'), 'utf8');
+writeFileSync(join(profileG, 'cordis.yml'), '[]\n', 'utf8');
+const envG = { ...env, DSH_HOME: homeG };
+const instG = await run('pnpm', ['install', '--offline'], { cwd: profileG, timeoutMs: 90000 });
+ok(instG.code === 0, '[G] pnpm install exit=' + instG.code);
+const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '12000' }, timeoutMs: 120000 });
+const jG = JSON.parse((gG.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
+ok(jG.ok === true && jG.attempts >= 2, '[G] 多坏插件：预检 + 归因两次禁用后正常启动（attempts=' + jG.attempts + '）');
+ok(jG.disabled.includes('fixture-bad-import') && jG.disabled.includes('fixture-bad-apply'), '[G] 两个坏行都在禁用列表');
+const ledgerG = JSON.parse(readFileSync(join(homeG, 'state', 'dsh-error-tell', 'quarantine.json'), 'utf8'));
+ok(ledgerG.entries.filter(e2 => !e2.restoredAt).length === 2, '[G] 账本含 2 条活动中记录');
 // 9) 清理
 rmSync(tmp, { recursive: true, force: true });
 console.log('e2e 完成，临时目录已清理:', tmp);

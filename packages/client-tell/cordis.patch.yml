@@ -1,5 +1,5 @@
-# dsh-error-tell client-tell（M3 骨架）：仅挂 host 行；
-# 浏览器侧"禁用并重载"按钮 + errorTell/disable Remote 待实现。
+# dsh-error-tell client-tell：加载页「禁用并重载」按钮 + errorTell/disable 端点。
 - insert:
     - id: error-tell-client-host
       name: '@dsh-error-tell/client-tell/host'
+      inject: [webServer]

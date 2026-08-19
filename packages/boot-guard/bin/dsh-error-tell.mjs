@@ -33,7 +33,9 @@ const cmd = positionals[0] ?? 'guard';
 const home = dshHome();
 
 if (cmd === 'guard') {
-  const r = await guard({
+  let r;
+  try {
+  r = await guard({
     profile: values.profile,
     patchFiles: values.patch,
     dryRun: values["dry-run"],
@@ -44,6 +46,10 @@ if (cmd === 'guard') {
     quitAfterMs: Number(process.env.DSH_ERROR_TELL_QUIT_AFTER_MS || 0),
     env: process.env
   });
+  } catch (e) {
+    console.error('[dsh-error-tell] guard 失败（未修改任何配置）: ' + (e?.message ?? e));
+    process.exit(6);
+  }
   const ok = r.dryRun ? true : (r.spawn?.quit || (r.spawn?.code !== null && [0, 130, 143].includes(r.spawn.code)));
   console.log(JSON.stringify({
     ok, dryRun: !!r.dryRun, attempts: r.attempts, disabled: r.disabled,

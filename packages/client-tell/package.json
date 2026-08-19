@@ -13,5 +13,8 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "dependencies": {
+    "@dsh-error-tell/boot-guard": "file:../boot-guard"
   }
 }
