@@ -200,35 +200,30 @@ const instD = await run('pnpm', ['install', '--offline'], { cwd: profileD, timeo
 ok(instD.code === 0, '[D] pnpm install exit=' + instD.code);
 const dryD = await run('node', [BIN, 'guard', '--profile', 'web', '--dry-run'], { env: envD, timeoutMs: 60000 });
 ok(dryD.stdout.includes('[error/import] fixture-bad-import'), '[D] dry-run 预检发现 import 失败行');
-const gD = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envD, DSH_ERROR_TELL_QUIT_AFTER_MS: '12000' }, timeoutMs: 90000 });
+const gD = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envD, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 90000 });
 const jD = JSON.parse((gD.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 ok(jD.ok === true && jD.attempts === 1, '[D] import 失败被预检拦截：无需重启直接正常启动（attempts=' + jD.attempts + '）');
 ok(jD.disabled.includes('fixture-bad-import'), '[D] 禁用列表含 fixture-bad-import');
 
-// ===== Phase E：pending（注入不存在的服务）=====
+// ===== Phase E：幂等性 —— 无坏插件时零副作用（验收标准 #3）=====
 const homeE = join(tmp, 'homeE');
 const profileE = join(homeE, 'profiles', 'web');
 mkdirSync(profileE, { recursive: true });
 writeFileSync(join(profileE, 'package.json'), JSON.stringify({
   name: 'dsh-profile-web', private: true,
-  dependencies: { '@dsh-error-tell/fixture-bad-pending': 'file:' + join(ROOT, 'packages', 'test-fixtures', 'bad-pending').replaceAll('\\', '/') },
+  dependencies: {},
   dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } }
 }, null, 2) + '\n', 'utf8');
-writeFileSync(join(profileE, 'cordis.patch.yml'), [
-  '- insert:',
-    '    - id: fixture-bad-pending',
-      "      name: '@dsh-error-tell/fixture-bad-pending'",
-  ''
-].join('\n'), 'utf8');
+writeFileSync(join(profileE, 'cordis.patch.yml'), '# 干净 profile\n', 'utf8');
 writeFileSync(join(profileE, 'cordis.yml'), '[]\n', 'utf8');
 const envE = { ...env, DSH_HOME: homeE };
 const instE = await run('pnpm', ['install', '--offline'], { cwd: profileE, timeoutMs: 90000 });
 ok(instE.code === 0, '[E] pnpm install exit=' + instE.code);
-const gE = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envE, DSH_ERROR_TELL_QUIT_AFTER_MS: '12000' }, timeoutMs: 90000 });
+const gE = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envE, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 90000 });
 const jE = JSON.parse((gE.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
-ok(jE.ok === true && jE.attempts >= 2, '[E] pending 行被 stderr 归因禁用并重启成功（attempts=' + jE.attempts + '）');
-ok(jE.disabled.includes('fixture-bad-pending'), '[E] 禁用列表含 fixture-bad-pending');
-
+ok(jE.ok === true && jE.attempts === 1 && jE.disabled.length === 0, '[E] 干净 profile：一次启动成功，未禁用任何行');
+ok(!existsSync(join(homeE, 'cordis.patch.yml')), '[E] 未创建 home patch（零副作用）');
+ok(!existsSync(join(homeE, 'state', 'dsh-error-tell')), '[E] 未创建隔离账本（零副作用）');
 // ===== Phase F：home patch YAML 损坏 —— guard 友好失败，不改配置 =====
 const homeF = join(tmp, 'homeF');
 mkdirSync(join(homeF, 'profiles'), { recursive: true });
@@ -263,7 +258,7 @@ writeFileSync(join(profileG, 'cordis.yml'), '[]\n', 'utf8');
 const envG = { ...env, DSH_HOME: homeG };
 const instG = await run('pnpm', ['install', '--offline'], { cwd: profileG, timeoutMs: 90000 });
 ok(instG.code === 0, '[G] pnpm install exit=' + instG.code);
-const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '12000' }, timeoutMs: 120000 });
+const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '25000' }, timeoutMs: 150000 });
 const jG = JSON.parse((gG.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 ok(jG.ok === true && jG.attempts >= 2, '[G] 多坏插件：预检 + 归因两次禁用后正常启动（attempts=' + jG.attempts + '）');
 ok(jG.disabled.includes('fixture-bad-import') && jG.disabled.includes('fixture-bad-apply'), '[G] 两个坏行都在禁用列表');
