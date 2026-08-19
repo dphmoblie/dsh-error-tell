@@ -64,9 +64,10 @@ mkProfile(homeG, {
 const envG = { ...process.env, DSH_HOME: homeG, DSH_TELEMETRY_DISABLED: '1' };
 const instG = await run('pnpm', ['install', '--offline'], { cwd: join(homeG, 'profiles', 'web'), timeoutMs: 60000 });
 ok(instG.code === 0, '[G] pnpm install exit=' + instG.code);
-const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '25000' }, timeoutMs: 80000 });
+const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '2'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '25000' }, timeoutMs: 120000 });
 const jG = JSON.parse((gG.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
-ok(jG.ok === true && jG.attempts >= 2, '[G] 多坏插件最终正常启动（attempts=' + jG.attempts + '）');
+// S2 语义：import 坏行预检命中，apply 坏行第 1 次启动才暴露（观察中），第 2 次重启后禁用，第 3 次启动成功
+ok(jG.ok === true && jG.attempts >= 3, '[G] 多坏插件最终正常启动（attempts=' + jG.attempts + '）');
 ok(jG.disabled.includes('fixture-bad-import') && jG.disabled.includes('fixture-bad-apply'), '[G] 两个坏行都在禁用列表');
 const ledgerG = JSON.parse(readFileSync(join(homeG, 'state', 'dsh-error-tell', 'quarantine.json'), 'utf8'));
 ok(ledgerG.entries.filter(e2 => !e2.restoredAt).length === 2, '[G] 账本含 2 条活动中记录');

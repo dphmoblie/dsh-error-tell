@@ -43,8 +43,10 @@ writeFileSync(join(profileC, 'package.json'), JSON.stringify(pkgC, null, 2) + '\
 const instC = await run('pnpm', ['install', '--offline'], { cwd: profileC, timeoutMs: 60000 });
 ok(instC.code === 0, '[C] pnpm install exit=' + instC.code);
 const envC = { ...process.env, DSH_HOME: homeC, DSH_TELEMETRY_DISABLED: '1' };
-const PORT = 31885;
-const server = spawn('dsh', ['--profile', 'web', '--port', String(PORT)], { env: envC, windowsHide: true, shell: true });
+// M5：随机空闲端口（避免固定端口冲突）
+import { createServer as createProbeServer } from 'node:net';
+const PORT = await new Promise((res) => { const s = createProbeServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
+const server = spawn('dsh', ['--profile', 'web', '--port', String(PORT)], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' }, windowsHide: true, shell: true });
 let ready = false, exitCode = null;
 server.on('exit', (c) => { exitCode = c; });
 server.stderr?.on('data', () => {});
@@ -56,10 +58,10 @@ for (let i = 0; i < 30; i++) {
 ok(ready && exitCode === null, '[C] web 服务就绪且宿主存活');
 let html1 = '';
 try { html1 = await (await fetch('http://127.0.0.1:' + PORT + '/')).text(); } catch {}
-ok(html1.includes('dsh-error-tell-inject'), '[C] 注入脚本存在');
+ok(html1.includes('// dsh-error-tell 注入脚本'), '[C] 注入脚本存在');
 ok(html1.includes('fixture-bad-client'), '[C] __DSH_BOOT__ 含坏 client 行');
 const dis = await fetch('http://127.0.0.1:' + PORT + '/api/error-tell/disable', {
-  method: 'POST', headers: { 'content-type': 'application/json', 'x-dsh-error-tell': '1' },
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-dsh-error-tell': '1', 'x-dsh-error-token': 'test-token' },
   body: JSON.stringify({ rowId: '@dsh-error-tell/fixture-bad-client' })
 }).then(r => r.json()).catch(e => ({ error: e.message }));
 ok(dis.ok === true, '[C] 禁用端点 ok');

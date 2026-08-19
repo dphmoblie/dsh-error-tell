@@ -24,8 +24,22 @@ function syncLedger(home, entry) {
   renameSync(ledgerPath + '.tmp', ledgerPath);
 }
 
+/** 当前 managed 段禁用行数（上限判定用）。 */
+export function countManaged(patchPath) {
+  let text = '';
+  try { text = readFileSync(patchPath, 'utf8'); } catch { return 0; }
+  const start = text.indexOf(MANAGED_START);
+  const end = text.indexOf(MANAGED_END);
+  if (start < 0 || end <= start) return 0;
+  let n = 0;
+  for (const line of text.slice(start + MANAGED_START.length, end).split(/\r?\n/)) {
+    if (/^\s*-\s*id:/.test(line)) n += 1;
+  }
+  return n;
+}
+
 /** 同步把 rowId 加入 managed 禁用段。 */
-function syncDisable(patchPath, rowId) {
+export function syncDisable(patchPath, rowId) {
   let text = "";
   try { text = readFileSync(patchPath, 'utf8'); } catch { /* new file */ }
   const start = text.indexOf(MANAGED_START);
@@ -50,18 +64,35 @@ function syncDisable(patchPath, rowId) {
   renameSync(patchPath + '.tmp', patchPath);
 }
 
+/**
+ * 记录一次失败并同步落盘（账本必写；managed 禁用受 maxDisable 熔断）。
+ * 供 apply 与单测复用。
+ */
+export function recordFailure(home, patchPath, { rowId, pkg, stage, error, source = 'runtime-guard', maxDisable = 50, log = () => {} }) {
+  if (!rowId) return false;
+  syncLedger(home, { rowId, package: pkg, stage, error: String(error).split("\n")[0], source });
+  if (countManaged(patchPath) >= maxDisable) {
+    log('[dsh-error-tell] 熔断：managed 禁用数已达上限 ' + maxDisable + '，跳过禁用 ' + rowId + '（账本已记录）');
+    return false;
+  }
+  syncDisable(patchPath, rowId);
+  return true;
+}
+
 export function apply(ctx) {
   const home = process.env.DSH_HOME || join(homedir(), '.dsh');
   const patchPath = join(home, 'cordis.patch.yml');
+  const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 50);
   const seen = new Set();
 
   const record = (rowId, pkg, stage, error) => {
     if (seen.has(rowId) || rowId === SELF) return;
     seen.add(rowId);
     try {
-      syncLedger(home, { rowId, package: pkg, stage, error: String(error).split("\n")[0], source: "runtime-guard" });
-      syncDisable(patchPath, rowId);
-      ctx.logger?.error?.('[dsh-error-tell] 已禁用问题插件 ' + rowId + '（' + stage + '），重启后生效');
+      const disabled = recordFailure(home, patchPath, { rowId, pkg, stage, error, source: 'runtime-guard', maxDisable, log: (m) => ctx.logger?.error?.(m) });
+      ctx.logger?.error?.(disabled
+        ? '[dsh-error-tell] 已禁用问题插件 ' + rowId + '（' + stage + '），重启后生效'
+        : '[dsh-error-tell] 已记录 ' + rowId + '（' + stage + '），但未写入 managed 禁用');
     } catch (e) {
       ctx.logger?.error?.('[dsh-error-tell] 落盘失败: ' + (e?.message ?? e));
     }

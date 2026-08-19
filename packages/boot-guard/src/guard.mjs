@@ -72,9 +72,15 @@ export async function guard(opts = {}) {
   const patchPath = homePatchPath(home);
   const probeDir = join(tmpdir(), "dsh-error-tell");
 
-  // 启动前已禁用的行（managed 段 + 活动账本）→ 探针临时启用
+  // 启动前已禁用的行（managed 段 + 账本中达到熔断阈值的活动记录）→ 探针临时启用。
+  // 注意：账本中 failCount 未达阈值（观察中）的行尚未禁用，不应纳入探针，
+  // 否则刚写入的 managed 禁用会被探针的 disabled:false 覆盖，导致坏插件真实加载。
   const managedIds = new Set(readManaged(patchPath).ids);
-  const activeIds = new Set(activeQuarantine(home).map(e => e.rowId));
+  const activeIds = new Set(
+    activeQuarantine(home)
+      .filter(e => (e.failCount ?? 1) >= threshold)
+      .map(e => e.rowId)
+  );
   const probeIds = probe ? new Set([...managedIds, ...activeIds]) : new Set();
   let probePatchFile = null;
   try {
@@ -90,22 +96,28 @@ export async function guard(opts = {}) {
     log("[dsh-error-tell] rows=" + rows.length + " issues=" + issues.length + " errors=" + failures.length);
     for (const i of issues) log('  [' + i.severity + '/' + i.stage + '] ' + i.rowId + ': ' + String(i.message).split('\n')[0]);
 
-    // 本次预检失败：累计 failCount，达到 threshold 才写 managed
+    // 本次预检失败：计算连续失败判定（dry-run 只计算不落盘，保证零副作用）
     const toDisableNow = new Set();
+    const preFailures = [];
     for (const f of failures) {
-      addQuarantine(home, {
-        rowId: f.rowId, package: f.package ?? (rows.find(r => r.id === f.rowId)?.name), stage: f.stage,
-        error: String(f.message).split('\n')[0], source: 'boot-guard'
-      });
-      const n = failureCount(home, f.rowId);
-      const willDisable = decideDisable(1, n - 1, threshold);
+      const prior = failureCount(home, f.rowId);
+      const n = prior + 1;
+      const willDisable = decideDisable(1, prior, threshold);
       log('  [第' + n + '次失败] ' + f.rowId + (willDisable ? ' → 本次禁用' : '（观察中，未禁用）'));
       if (willDisable) toDisableNow.add(f.rowId);
+      preFailures.push(f);
     }
     if (probeIds.size) log('[dsh-error-tell] 探针行（启动前已禁用，本次临时启用验证）: ' + [...probeIds].join(', '));
     if (dryRun) {
       for (const id of toDisableNow) log('  [plan] disable ' + id);
       return { rows, issues, toDisable: [...toDisableNow], probeIds: [...probeIds], dryRun: true, spawn: null, attempts: 0, disabled: [] };
+    }
+    // 真实模式才落账本
+    for (const f of preFailures) {
+      addQuarantine(home, {
+        rowId: f.rowId, package: f.package ?? (rows.find(r => r.id === f.rowId)?.name), stage: f.stage,
+        error: String(f.message).split('\n')[0], source: 'boot-guard'
+      });
     }
     assertDisableLimit(toDisableNow, maxDisable, log);
     // 写 managed：既有 managed 集合 + 本次新增（探针行保持禁用态不变）

@@ -1,4 +1,14 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+
+/** Windows 用 taskkill /T 杀进程树；POSIX 用负 pid 杀进程组。 */
+export function killTree(child) {
+  if (!child || child.pid === undefined) return;
+  if (process.platform === 'win32') {
+    try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); } catch { /* 已退出 */ }
+  } else {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* 已退出 */ } }
+  }
+}
 
 export function quoteArg(s) {
   return '"' + String(s).replace(/(["\\$`])/g, '\\$1') + '"';
@@ -18,14 +28,14 @@ export function runDsh(bin, args, { env = process.env, timeoutMs = 120000, quitA
     const finish = (res) => { if (done) return; done = true; clearTimeout(timer); clearTimeout(quitTimer); resolve(res); };
     child.stdout?.on('data', d => stdout += d);
     child.stderr?.on('data', d => stderr += d);
-    child.on('error', e => finish({ code: null, stdout, stderr, timedOut: false, quit: false, error: e.message }));
+    child.on('error', e => { killTree(child); finish({ code: null, stdout, stderr, timedOut: false, quit: false, error: e.message }); });
     child.on('close', (code) => { if (quitTimer) { clearTimeout(quitTimer); quitTimer = null; } finish({ code, stdout, stderr, timedOut: false, quit: false }); });
     if (timeoutMs > 0) timer = setTimeout(() => {
-      child.kill();
+      killTree(child);
       finish({ code: null, stdout, stderr, timedOut: true, quit: false });
     }, timeoutMs);
     if (quitAfterMs > 0) quitTimer = setTimeout(() => {
-      child.kill();
+      killTree(child);
       finish({ code: null, stdout, stderr, timedOut: false, quit: true });
     }, quitAfterMs);
   });

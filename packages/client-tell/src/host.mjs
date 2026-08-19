@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger } from '@dsh-error-tell/boot-guard';
@@ -29,15 +30,18 @@ export function apply(ctx) {
   const home = process.env.DSH_HOME || join(homedir(), '.dsh');
   const patchPath = join(home, 'cordis.patch.yml');
   const webServer = ctx.webServer;
+  // M3：per-page 随机 token，注入脚本携带，端点校验（跨域页面无法读取）
+  const token = process.env.DSH_ERROR_TELL_TOKEN || randomBytes(16).toString('hex');
+  const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 50);
 
   // 1) 加载页注入：禁用/恢复按钮脚本（独立于插件树）
   const disposeTap = webServer.tapIndex((html) => {
     if (html.includes('dsh-error-tell-inject')) return html;
-    const script = '<script>' + INJECT_SCRIPT + '</scr' + 'ipt>';
+    const script = '<script>' + INJECT_SCRIPT.replaceAll('__DSH_ERROR_TOKEN__', token) + '</scr' + 'ipt>';
     return html.includes('</body>') ? html.replace('</body>', script + '</body>') : html.replace('</head>', script + '</head>');
   });
 
-  const guardHeader = (req) => req.headers[GUARD_HEADER] === '1';
+  const guardHeader = (req) => req.headers[GUARD_HEADER] === '1' && req.headers['x-dsh-error-token'] === token;
 
   // 2) 禁用端点
   const disposeRoute = webServer.register({
@@ -56,6 +60,9 @@ export function apply(ctx) {
       try {
         addQuarantine(home, { rowId: found, package: rowId, stage: 'client', error: 'browser 手动禁用（client-tell）', source: 'client-tell' });
         const managed = readManaged(patchPath);
+        if (managed.ids.size >= maxDisable) {
+          return json(res, 429, { ok: false, error: 'disabled count limit reached (' + maxDisable + ')' });
+        }
         managed.ids.add(found);
         writeManaged(patchPath, managed.ids);
       } catch (e) {
