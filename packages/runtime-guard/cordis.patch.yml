@@ -1,0 +1,4 @@
+# dsh-error-tell runtime guard — 作为补丁层最后一行插入，守护兄弟插件。
+- insert:
+    - id: error-tell-runtime
+      name: '@dsh-error-tell/runtime-guard'

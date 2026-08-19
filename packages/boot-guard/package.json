@@ -1,0 +1,15 @@
+{
+  "name": "@dsh-error-tell/boot-guard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "dsh-error-tell": "bin/dsh-error-tell.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}

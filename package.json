@@ -1,0 +1,15 @@
+{
+  "name": "dsh-error-tell",
+  "private": true,
+  "version": "0.1.0",
+  "description": "DSH 启动自检：检测并持久化禁用问题插件，让 dsh web 正常打开",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test packages/boot-guard/test/*.test.mjs",
+    "e2e": "node test/e2e/run-e2e.mjs"
+  }
+}

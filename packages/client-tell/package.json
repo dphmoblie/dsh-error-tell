@@ -1,0 +1,17 @@
+{
+  "name": "@dsh-error-tell/client-tell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/host.mjs",
+  "exports": {
+    ".": "./src/host.mjs",
+    "./host": "./src/host.mjs",
+    "./client": "./src/client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
