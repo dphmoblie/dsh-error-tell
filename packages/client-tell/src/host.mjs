@@ -35,7 +35,7 @@ export function apply(ctx) {
 
   // 1) 加载页注入：禁用/恢复按钮脚本（独立于插件树）
   const disposeTap = webServer.tapIndex((html) => {
-    if (html.includes('dsh-error-tell-inject')) return html;
+    if (html.includes('data-dsh-error-tell')) return html; // 防重复注入标记（与脚本内面板标记一致）
     const script = '<script>' + INJECT_SCRIPT.replaceAll('__DSH_ERROR_TOKEN__', token) + '</scr' + 'ipt>';
     return html.includes('</body>') ? html.replace('</body>', script + '</body>') : html.replace('</head>', script + '</head>');
   });
