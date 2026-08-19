@@ -70,6 +70,11 @@ export async function guard(opts = {}) {
   } = opts;
   const home = dshHome(env);
   const patchPath = homePatchPath(home);
+  // M7：能力自检——记录 dsh 版本，便于私有 API 行为漂移时定位
+  try {
+    const v = await runDsh(dshBin, ['--version'], { env, timeoutMs: 20000 });
+    if (v.code === 0 && (v.stdout || '').trim()) log('[dsh-error-tell] dsh 版本: ' + (v.stdout || '').trim().split('\n')[0]);
+  } catch { /* 版本探测失败不阻塞 */ }
   const probeDir = join(tmpdir(), "dsh-error-tell");
 
   // 启动前已禁用的行（managed 段 + 账本中达到熔断阈值的活动记录）→ 探针临时启用。
@@ -135,6 +140,8 @@ export async function guard(opts = {}) {
       }
       // 参数顺序：--patch 是 launcher 选项，必须排在 --port（app 内层参数起点）之前
       const args = ["--profile", profile];
+      // M2：用户 --patch 覆盖层与探针覆盖层都传给 dsh（保持预检与启动同一棵树）
+      for (const p of patchFiles) args.push('--patch', p);
       if (probePatchFile) args.push('--patch', probePatchFile);
       if (port !== undefined && port !== null && port !== '') args.push('--port', String(port));
       args.push(...extraArgs);

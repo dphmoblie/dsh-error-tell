@@ -41,6 +41,7 @@ function numOption(name, value) {
   return n;
 }
 const cmd = positionals[0] ?? 'guard';
+const passthrough = positionals.slice(1); // M2：`guard -- <dsh 参数...>` 原样转发
 const home = dshHome();
 
 if (cmd === 'guard') {
@@ -56,8 +57,9 @@ if (cmd === 'guard') {
     importChecks: !values["no-import-checks"],
     dshBin: values.dsh,
     timeoutMs: numOption('timeout-ms', values["timeout-ms"] || 120000),
-    port: values.port !== undefined ? numOption('port', values.port) : 0,
+    // M2：默认不传 --port（沿用 dsh 默认 3080）；用户显式给才传
     quitAfterMs: Number(process.env.DSH_ERROR_TELL_QUIT_AFTER_MS || 0),
+    extraArgs: passthrough,
     env: process.env
   });
   } catch (e) {

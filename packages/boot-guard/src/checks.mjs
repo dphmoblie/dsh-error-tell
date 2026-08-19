@@ -44,6 +44,9 @@ function checkImport(name, cwdList, timeoutMs) {
  * 对行清单做静态检查 + import 干跑。
  * @returns issues: { severity: "error"|"warn"|"info", stage, rowId, package?, message }
  */
+// M8：进程内去重——同一包名（相同 profileDir/dshInstall）只做一次 import 干跑
+const importCache = new Map();
+
 export async function runChecks(rows, { profileDir, dshInstall, timeoutMs = 20000, skipPackages = [], importChecks = true } = {}) {
   const issues = [];
   const seen = new Set();
@@ -66,7 +69,12 @@ export async function runChecks(rows, { profileDir, dshInstall, timeoutMs = 2000
       issues.push({ severity: 'info', stage: 'probe', rowId: row.id, message: 'client-only 包 ' + row.name + '，跳过 import 干跑（浏览器侧，见 client-tell）' });
       continue;
     }
-    const r = await checkImport(row.name, [profileDir, dshInstall].filter(Boolean), timeoutMs);
+    const cacheKey = row.name + '@' + (profileDir || '') + '@' + (dshInstall || '');
+    let r = importCache.get(cacheKey);
+    if (!r) {
+      r = await checkImport(row.name, [profileDir, dshInstall].filter(Boolean), timeoutMs);
+      importCache.set(cacheKey, r);
+    }
     if (!r.ok) issues.push({ severity: 'error', stage: r.stage, rowId: row.id, package: row.name, message: r.error });
   }
   return issues;

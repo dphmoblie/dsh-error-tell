@@ -37,6 +37,24 @@ jobs:
       - name: e2e S3（端点 maxDisable 熔断）
         run: pnpm e2e:s3c
 
+
+  unit-linux:
+    name: 单元测试（ubuntu，跨平台）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 单元测试
+        run: pnpm test
   full:
     name: 全链路 e2e（A-H，手动触发）
     if: github.event_name == 'workflow_dispatch'

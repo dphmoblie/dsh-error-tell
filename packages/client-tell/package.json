@@ -15,5 +15,13 @@
   },
   "dependencies": {
     "@dsh-error-tell/boot-guard": "file:../boot-guard"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
   }
 }

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
-const tmpBase = process.env.TEMP || 'C:\\Users\\user\\AppData\\Local\\Temp';
+const tmpBase = (await import('node:os')).tmpdir();
 const HOME = join(tmpBase, 'dsh-error-tell-s2-home');
 let failed = 0;
 function ok(c, m) { if (!c) { failed++; console.error('✖ FAIL:', m); } else console.log('✔', m); }
