@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 同一分支/PR 新提交自动取消旧 run，避免排队重复安装 dsh（npm i -g 需拉几十个 @deepseek-ai 包）
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   fast:
     name: 单元测试 + 分段 e2e（C/D/EFG/S3）
