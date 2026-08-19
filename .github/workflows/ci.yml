@@ -4,12 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   fast:
-    name: 单元测试 + 分段 e2e（C/D/E/F/G）
+    name: 单元测试 + 分段 e2e（C/D/EFG/S3）
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -25,15 +26,20 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: 单元测试
         run: pnpm test
-      - name: e2e Phase C+D（client-tell / import 预检）
-        run: pnpm e2e:cd
-      - name: e2e Phase E+F+G（幂等性 / YAML 损坏 / 多坏插件）
+      - name: e2e Phase C（client-tell 注入/禁用端点/组合图排除）
+        run: pnpm e2e:c
+      - name: e2e Phase D（import 预检拦截）
+        run: pnpm e2e:d
+      - name: e2e Phase E+F+G（幂等性/YAML 损坏/多坏插件）
         run: pnpm e2e:efg
+      - name: e2e S3（端点 maxDisable 熔断）
+        run: pnpm e2e:s3c
 
   full:
-    name: 全链路 e2e（A-H）
+    name: 全链路 e2e（A-H，手动触发）
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

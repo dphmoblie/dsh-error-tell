@@ -15,6 +15,8 @@
     "e2e:efg": "node test/e2e/verify-efg.mjs",
     "e2e:s2a": "node test/e2e/verify-s2a.mjs",
     "e2e:s2b": "node test/e2e/verify-s2b.mjs",
-    "e2e:s3c": "node test/e2e/verify-s3c.mjs"
+    "e2e:s3c": "node test/e2e/verify-s3c.mjs",
+    "e2e:c": "node test/e2e/verify-c.mjs",
+    "e2e:d": "node test/e2e/verify-d.mjs"
   }
 }
