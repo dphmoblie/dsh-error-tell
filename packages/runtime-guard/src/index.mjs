@@ -88,6 +88,20 @@ export function apply(ctx) {
   ctx.on('loader/entry-init', watch);
   try { for (const entry of ctx.loader.entries()) watch(entry); } catch { /* loader 未就绪 */ }
 
+  // 3) 兜底 A：apply 时扫描已在途失败（状态 FAILED）的兄弟条目
+  try {
+    for (const entry of ctx.loader.entries()) {
+      const f = entry.fiber;
+      if (f && f.state === FIBER_FAILED) record(entry.options.id, entry.options.name, "apply", f._error ?? "plugin apply failed");
+    }
+  } catch { /* loader 未就绪 */ }
+
+  // 4) 兜底 B：fiber 释放事件（uid 置空）时若带 _error 也记录（覆盖 internal/status 竞态）
+  ctx.on('internal/plugin', (fiber) => {
+    if (fiber.uid !== null || !fiber.entry || !fiber._error) return;
+    record(fiber.entry.options.id, fiber.name, 'apply', fiber._error);
+  });
+
   ctx.logger?.info?.('[dsh-error-tell] runtime guard active (home=%s)', home);
   return () => { /* 常驻 */ };
 }
