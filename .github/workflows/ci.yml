@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fast:
+    name: 单元测试 + 分段 e2e（C/D/E/F/G）
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装 dsh CLI（e2e 依赖）
+        run: npm i -g @deepseek-ai/dsh@0.1.0-rc.6
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 单元测试
+        run: pnpm test
+      - name: e2e Phase C+D（client-tell / import 预检）
+        run: pnpm e2e:cd
+      - name: e2e Phase E+F+G（幂等性 / YAML 损坏 / 多坏插件）
+        run: pnpm e2e:efg
+
+  full:
+    name: 全链路 e2e（A-H）
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装 dsh CLI（e2e 依赖）
+        run: npm i -g @deepseek-ai/dsh@0.1.0-rc.6
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 全链路 e2e
+        run: node test/e2e/run-e2e.mjs
