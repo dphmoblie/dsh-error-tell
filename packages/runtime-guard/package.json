@@ -24,5 +24,8 @@
   },
   "dependencies": {
     "@dsh-error-tell/core": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

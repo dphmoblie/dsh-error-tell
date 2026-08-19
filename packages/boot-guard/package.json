@@ -31,5 +31,8 @@
     "plugin",
     "guard",
     "error-tell"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }
