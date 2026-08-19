@@ -5,7 +5,9 @@
   "type": "module",
   "main": "./index.mjs",
   "exports": {
-    "./client": "./client.js"
+    ".": "./index.mjs",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
   },
   "dsh": {
     "client": {

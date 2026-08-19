@@ -18,10 +18,17 @@
      `_initTask` 拒绝；**同步**写账本 + managed 段（避免进程在异步写完成前退出）。
    - 不注入任何被守卫服务、不禁自己、失败只记日志。
 
-3. **client-tell（浏览器侧，M3）**
-   - 加载页失败清单 + "禁用并重载"按钮；host Remote `errorTell/disable`
-     写禁用后 `location.reload()`。客户端 loader `write()` 是 no-op，
-     持久化必须走宿主配置。
+3. **client-tell（浏览器侧）**
+   - 宿主 `error-tell-client-host`（inject: webServer）：
+     a. `webServer.tapIndex` 向 index.html 注入独立脚本（加载页失败时插件树未启动，
+        所以按钮不能由插件渲染）；脚本轮询 DOM 找到 "Failed to load plugins" 卡片，
+        提取失败条目（跳过含换行的引导错误消息），渲染「禁用并重载 / 全部禁用并重载」按钮。
+     b. `webServer.register` exact 路由 `POST /api/error-tell/disable`：
+        校验 `x-dsh-error-tell` 头（CSRF 兜底）、解析 rowId（entry.id 或 entry.options.name）、
+        拒绝 self/guard 行，写账本 + managed 段后返回 `{ok:true}`，前端 `location.reload()`。
+   - 持久化后由 `watchUserPatches`（home patch 变更）热重载组合树，
+     `dsh-client-modules` 组装 `window.__DSH_BOOT__` 时跳过 disabled/无 fiber 行 → 刷新即恢复。
+   - 客户端 loader `write()` 是 no-op，持久化必须走宿主配置（本实现即如此）。
 
 ## 关键机制
 
