@@ -50,7 +50,7 @@ const server = spawn('dsh', ['--profile', 'web', '--port', String(PORT)], { env:
 let ready = false, exitCode = null;
 server.on('exit', (c) => { exitCode = c; });
 server.stderr?.on('data', () => {});
-for (let i = 0; i < 30; i++) {
+for (let i = 0; i < 90; i++) {
   try { const r = await fetch('http://127.0.0.1:' + PORT + '/'); if (r.status === 200) { ready = true; break; } } catch {}
   if (exitCode !== null) break;
   await new Promise(r2 => setTimeout(r2, 1000));

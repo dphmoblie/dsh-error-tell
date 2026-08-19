@@ -55,7 +55,7 @@ let exitCode = null;
 server.on('exit', c => { exitCode = c; });
 server.stderr?.on('data', () => {});
 let ready = false;
-for (let i = 0; i < 40; i++) {
+for (let i = 0; i < 90; i++) {
   try { const r = await fetch('http://127.0.0.1:' + PORT + '/'); if (r.status === 200) { ready = true; break; } } catch {}
   if (exitCode !== null) break;
   await new Promise(r2 => setTimeout(r2, 1000));

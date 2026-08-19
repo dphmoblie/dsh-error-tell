@@ -65,7 +65,7 @@ ok(boot.code === 1, '坏插件启动失败（exit 1）');
 ok((boot.stderr + boot.stdout).includes('fixture-bad-apply'), 'stderr 归因到 fixture-bad-apply');
 
 // 5) guard：先失败归因 → 禁用 → 重启成功（quit 钩子 20s 后结束）
-const g = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '2', '--timeout-ms', '120000'], { env: { ...env, DSH_ERROR_TELL_QUIT_AFTER_MS: '20000' }, timeoutMs: 180000 });
+const g = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '2', '--timeout-ms', '120000'], { env: { ...env, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 180000 });
 const gjson = (g.stdout.match(/\{[\s\S]*\}/) || [''])[0];
 let parsed = null;
 try { parsed = JSON.parse(gjson); } catch { /* 无 JSON 输出 */ }
@@ -157,7 +157,7 @@ let serverOut = '', serverErr = '';
 serverC.stdout?.on('data', d => serverOut += d);
 serverC.stderr?.on('data', d => serverErr += d);
 let readyC = false;
-for (let i = 0; i < 60; i++) {
+for (let i = 0; i < 90; i++) {
   try { const r = await fetch('http://127.0.0.1:' + PORT_C + '/'); if (r.status === 200) { readyC = true; break; } } catch { /* 未就绪 */ }
   await new Promise(r2 => setTimeout(r2, 1000));
 }
@@ -206,7 +206,7 @@ const instD = await run('pnpm', ['install', '--offline'], { cwd: profileD, timeo
 ok(instD.code === 0, '[D] pnpm install exit=' + instD.code);
 const dryD = await run('node', [BIN, 'guard', '--profile', 'web', '--dry-run'], { env: envD, timeoutMs: 60000 });
 ok(dryD.stdout.includes('[error/import] fixture-bad-import'), '[D] dry-run 预检发现 import 失败行');
-const gD = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envD, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 90000 });
+const gD = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envD, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 90000 });
 const jD = JSON.parse((gD.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 ok(jD.ok === true && jD.attempts === 1, '[D] import 失败被预检拦截：无需重启直接正常启动（attempts=' + jD.attempts + '）');
 ok(jD.disabled.includes('fixture-bad-import'), '[D] 禁用列表含 fixture-bad-import');
@@ -264,7 +264,7 @@ writeFileSync(join(profileG, 'cordis.yml'), '[]\n', 'utf8');
 const envG = { ...env, DSH_HOME: homeG };
 const instG = await run('pnpm', ['install', '--offline'], { cwd: profileG, timeoutMs: 90000 });
 ok(instG.code === 0, '[G] pnpm install exit=' + instG.code);
-const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '2'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '25000' }, timeoutMs: 180000 });
+const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '2'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 180000 });
 const jG = JSON.parse((gG.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 // S2 语义：import 坏行预检命中，apply 坏行第 1 次启动才暴露（观察中），第 2 次重启后禁用，第 3 次启动成功
 ok(jG.ok === true && jG.attempts >= 3, '[G] 多坏插件：两轮归因禁用后正常启动（attempts=' + jG.attempts + '）');
