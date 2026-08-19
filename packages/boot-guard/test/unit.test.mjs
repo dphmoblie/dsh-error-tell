@@ -4,10 +4,10 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parsePatchYaml } from '../src/yaml.mjs';
-import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger } from '../src/quarantine.mjs';
+import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, failureCount } from '../src/quarantine.mjs';
 import { readManaged, writeManaged } from '../src/patch-writer.mjs';
 import { MANAGED_START, MANAGED_END } from '../src/home.mjs';
-import { inferFailures, assertDisableLimit } from '../src/guard.mjs';
+import { inferFailures, assertDisableLimit, decideDisable, writeProbePatch } from '../src/guard.mjs';
 
 test('parsePatchYaml 容忍 !!js 表达式（dump-config 形态）', async () => {
   const text = [
@@ -37,6 +37,39 @@ test('quarantine 账本：add → active → restore', () => {
   assert.equal(loadLedger(home).entries.filter(e => !e.restoredAt).length, 1);
   assert.ok(restoreQuarantine(home, 'r1'));
   assert.deepEqual(activeQuarantine(home), []);
+});
+
+test('quarantine failCount：连续失败累计，restore 后重置', () => {
+  const home = mkdtempSync(join(tmpdir(), 'det-fc-'));
+  addQuarantine(home, { rowId: 'r1', stage: 'import', error: 'e1' });
+  assert.equal(failureCount(home, 'r1'), 1);
+  addQuarantine(home, { rowId: 'r1', stage: 'import', error: 'e2' });
+  assert.equal(failureCount(home, 'r1'), 2, '第二次失败累计为 2');
+  assert.ok(restoreQuarantine(home, 'r1'));
+  assert.equal(failureCount(home, 'r1'), 0, '恢复后归零');
+  addQuarantine(home, { rowId: 'r1', stage: 'import', error: 'e3' });
+  assert.equal(failureCount(home, 'r1'), 1, '恢复后新失败重新从 1 计');
+});
+
+test('decideDisable：连续 2 次失败才禁用', () => {
+  assert.equal(decideDisable(1, 0, 2), false, '第 1 次失败不禁用');
+  assert.equal(decideDisable(1, 1, 2), true, '第 2 次失败禁用');
+  assert.equal(decideDisable(1, 3, 2), true, '更早失败过的继续禁用');
+  assert.equal(decideDisable(1, 0, 3), false, '阈值 3 时第 1 次不禁用');
+  assert.equal(decideDisable(1, 2, 3), true, '阈值 3 时第 3 次禁用');
+});
+
+test('writeProbePatch：生成 disabled:false 覆盖层', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'det-probe-'));
+  const f = writeProbePatch(new Set(['b', 'a']), dir);
+  assert.ok(f, '有探针行时生成文件');
+  const text = readFileSync(f, 'utf8');
+  assert.ok(text.includes('- id: a') && text.includes('disabled: false'), '覆盖为启用');
+  assert.equal(writeProbePatch(new Set(), dir), null, '空集合不生成');
+  // 目录不存在时自动创建（真实 guard 使用 os.tmpdir()/dsh-error-tell）
+  const missing = join(dir, 'nested', 'deep');
+  const f2 = writeProbePatch(new Set(['z']), missing);
+  assert.ok(f2 && readFileSync(f2, 'utf8').includes('- id: z'), '自动创建父目录');
 });
 
 test('patch-writer managed 段：创建/更新/保留用户内容', () => {

@@ -107,6 +107,9 @@ dsh-error-tell restore <rowId>
 - 拒绝禁用自身与 `error-tell-*` 守护行；
 - `maxDisable` 熔断：待禁用行数超限时拒绝修改任何配置；
 - 看门狗不递归、不禁自己、失败只记日志；
+- **连续 2 次失败才禁用**（账本 failCount，`--fail-threshold` 可调），瞬态失败不会被永久封杀；
+- **启动探针自动恢复**：已禁用行每次启动临时启用真实加载，成功即自动解除禁用；
+- **web 管理面板**：正常页面自动显示被禁用插件列表，一键恢复（`/api/error-tell/status` + `/restore`）；
 - 重启循环有上限，无法从 stderr 归因时熔断不循环；
 - 所有自动改动都可审计、可 `restore` 回滚。
 
@@ -136,6 +139,7 @@ docs/                # plan / architecture / verification
 - [x] M2 runtime-guard（同步落盘）
 - [x] M3 client-tell（注入脚本 + 禁用端点）
 - [x] M4 用例矩阵 + 熔断 + CI
+- [x] S2 评审修复：连续失败判定 + 探针自动恢复 + web 管理面板恢复
 - [ ] 发布 npm（先发布 boot-guard）
 - [ ] 真实用户环境试点
 

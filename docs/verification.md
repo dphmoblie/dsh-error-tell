@@ -33,6 +33,12 @@
 - 单元测试：7 ✔ / 0 ✖（yaml !!js 容错、quarantine、patch-writer、assertDisableLimit 熔断、inferFailures、注入脚本 VM 测试 ×2）
 - 真实 profile 冒烟：153 行组合解析成功，静态检查 0 问题（只读，不写配置）
 
+## S2（连续失败 + 探针恢复 + 管理面板）
+
+- 场景 A（`pnpm e2e:s2a`）：坏插件第 1 次失败 → 账本 failCount=1、**不写禁用**（观察中）；第 2 次失败 → failCount=2、写入 managed 禁用。8 断言全绿。
+- 场景 B（`pnpm e2e:s2b`）：修复插件后 guard 启动探针（临时覆盖 disabled:false 真实加载）→ 成功 → 自动恢复（managed 移除、账本 restoredAt）。3 断言全绿。
+- 管理面板：`GET /api/error-tell/status`（活动禁用列表）+ `POST /api/error-tell/restore`；注入脚本在正常页面渲染恢复面板（VM 单测覆盖）。
+
 ## 复现
 
 ```bash

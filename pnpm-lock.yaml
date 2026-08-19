@@ -14,13 +14,23 @@ importers:
         specifier: ^4.1.0
         version: 4.3.1
 
-  packages/client-tell: {}
+  packages/client-tell:
+    dependencies:
+      '@dsh-error-tell/boot-guard':
+        specifier: file:../boot-guard
+        version: link:../boot-guard
 
   packages/runtime-guard: {}
 
   packages/test-fixtures/bad-apply: {}
 
+  packages/test-fixtures/bad-client: {}
+
+  packages/test-fixtures/bad-hang: {}
+
   packages/test-fixtures/bad-import: {}
+
+  packages/test-fixtures/bad-pending: {}
 
 packages:
 

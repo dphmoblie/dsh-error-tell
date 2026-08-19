@@ -1,12 +1,21 @@
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { composeRows, runDsh } from './compose.mjs';
 import { runChecks } from './checks.mjs';
-import { loadLedger, addQuarantine, activeQuarantine } from './quarantine.mjs';
+import { loadLedger, addQuarantine, activeQuarantine, restoreQuarantine, failureCount } from './quarantine.mjs';
 import { readManaged, writeManaged } from './patch-writer.mjs';
 import { dshHome, homePatchPath } from './home.mjs';
 
 export const SELF_IDS = new Set(['error-tell-runtime', 'error-tell-client-host']);
 export const NORMAL_EXITS = new Set([0, 130, 143]);
+
+/**
+ * S2：连续失败判定——本次失败数 + 此前累计失败数达到 threshold 才真正禁用（防瞬态误杀）。
+ */
+export function decideDisable(failures, prior, threshold = 2) {
+  return failures + prior >= threshold;
+}
 
 /** 熔断：单次待禁用行数超过上限时拒绝继续（防误杀），且不修改任何配置。 */
 export function assertDisableLimit(toDisable, maxDisable, log = () => {}) {
@@ -16,7 +25,7 @@ export function assertDisableLimit(toDisable, maxDisable, log = () => {}) {
   }
 }
 
-function escapeRegExp(s) { return s.replace(/\$/g, '\\$').replace(/[.*+?^{}()|[\]\\]/g, '\\$&'); }
+function escapeRegExp(s) { return s.replace(/\$/g, "\\$").replace(/[.*+?^{}()|[\]\\]/g, "\\$&"); }
 
 /**
  * 从 stderr 推断失败行（精确匹配，防误杀）：
@@ -37,76 +46,125 @@ export function inferFailures(stderr, rows) {
   return [...hits];
 }
 
+/** 生成探针覆盖 patch：把已禁用行临时覆盖为 disabled: false（真实加载一次验证是否已修复）。 */
+export function writeProbePatch(ids, dir) {
+  if (!ids || ids.size === 0) return null;
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, 'dsh-error-tell-probe-' + Math.random().toString(16).slice(2) + '.yml');
+  const content = [...ids].sort().map(id => '- id: ' + id + '\n  disabled: false').join('\n') + '\n';
+  writeFileSync(file, content, "utf8");
+  return file;
+}
+
 /**
- * guard 主流程：组合 → 检查 → 落盘禁用 → 启动（失败归因重启）。
- * 返回 { rows, issues, toDisable, spawn, attempts, disabled }。
+ * guard 主流程：组合（含探针覆盖）→ 检查 → 连续失败判定落盘 → 启动（失败归因重启）。
+ * 启动成功后自动恢复探针行（S2）。
+ * 返回 { rows, issues, toDisable, probeIds, spawn, attempts, disabled }。
  */
 export async function guard(opts = {}) {
   const {
     profile = 'web', patchFiles = [], dryRun = false, restartLimit = 2,
     dshBin = 'dsh', port = 0, extraArgs = [], timeoutMs = 120000, maxDisable = 50,
-    env = process.env, profileDir, dshInstall, quitAfterMs = 0,
-    log = (msg) => console.log(msg)
+    threshold = 2, importChecks = true, env = process.env, profileDir, dshInstall, quitAfterMs = 0,
+    probe = true, log = (msg) => console.log(msg)
   } = opts;
   const home = dshHome(env);
-  const { rows } = await composeRows(profile, patchFiles, { dshBin, env });
-  const issues = await runChecks(rows, {
-    profileDir: profileDir || join(home, "profiles", profile),
-    dshInstall,
-    skipPackages: [...SELF_IDS]
-  });
-  const failures = issues.filter(i => i.severity === 'error');
-  log("[dsh-error-tell] rows=" + rows.length + " issues=" + issues.length + " errors=" + failures.length);
-  for (const i of issues) log('  [' + i.severity + '/' + i.stage + '] ' + i.rowId + ': ' + String(i.message).split('\n')[0]);
+  const patchPath = homePatchPath(home);
+  const probeDir = join(tmpdir(), "dsh-error-tell");
 
-  const ledger = loadLedger(home);
-  const toDisable = new Set(readManaged(homePatchPath(home)).ids);
-  for (const e of activeQuarantine(home)) toDisable.add(e.rowId);
-  for (const f of failures) toDisable.add(f.rowId);
-  assertDisableLimit(toDisable, maxDisable, log);
-
-  if (dryRun) {
-    for (const id of toDisable) log("  [plan] disable " + id);
-    return { rows, issues, toDisable: [...toDisable], dryRun: true, spawn: null, attempts: 0, disabled: [] };
-  }
-
-  for (const f of failures) {
-    addQuarantine(home, {
-      rowId: f.rowId, package: f.package ?? (rows.find(r => r.id === f.rowId)?.name), stage: f.stage,
-      error: String(f.message).split('\n')[0], source: 'boot-guard'
+  // 启动前已禁用的行（managed 段 + 活动账本）→ 探针临时启用
+  const managedIds = new Set(readManaged(patchPath).ids);
+  const activeIds = new Set(activeQuarantine(home).map(e => e.rowId));
+  const probeIds = probe ? new Set([...managedIds, ...activeIds]) : new Set();
+  let probePatchFile = null;
+  try {
+    probePatchFile = writeProbePatch(probeIds, probeDir);
+    const { rows } = await composeRows(profile, [...patchFiles, probePatchFile].filter(Boolean), { dshBin, env });
+    const issues = await runChecks(rows, {
+      importChecks,
+      profileDir: profileDir || join(home, "profiles", profile),
+      dshInstall,
+      skipPackages: [...SELF_IDS]
     });
-  }
-  const firstWrite = writeManaged(homePatchPath(home), toDisable);
-  if (firstWrite.ids.length) log("[dsh-error-tell] 已禁用 → " + homePatchPath(home) + ": " + firstWrite.ids.join(", "));
+    const failures = issues.filter(i => i.severity === 'error');
+    log("[dsh-error-tell] rows=" + rows.length + " issues=" + issues.length + " errors=" + failures.length);
+    for (const i of issues) log('  [' + i.severity + '/' + i.stage + '] ' + i.rowId + ': ' + String(i.message).split('\n')[0]);
 
-  const spawnArgs = ['--profile', profile];
-  if (port !== undefined && port !== null && port !== '') spawnArgs.push('--port', String(port));
-  spawnArgs.push(...extraArgs);
+    // 本次预检失败：累计 failCount，达到 threshold 才写 managed
+    const toDisableNow = new Set();
+    for (const f of failures) {
+      addQuarantine(home, {
+        rowId: f.rowId, package: f.package ?? (rows.find(r => r.id === f.rowId)?.name), stage: f.stage,
+        error: String(f.message).split('\n')[0], source: 'boot-guard'
+      });
+      const n = failureCount(home, f.rowId);
+      const willDisable = decideDisable(1, n - 1, threshold);
+      log('  [第' + n + '次失败] ' + f.rowId + (willDisable ? ' → 本次禁用' : '（观察中，未禁用）'));
+      if (willDisable) toDisableNow.add(f.rowId);
+    }
+    if (probeIds.size) log('[dsh-error-tell] 探针行（启动前已禁用，本次临时启用验证）: ' + [...probeIds].join(', '));
+    if (dryRun) {
+      for (const id of toDisableNow) log('  [plan] disable ' + id);
+      return { rows, issues, toDisable: [...toDisableNow], probeIds: [...probeIds], dryRun: true, spawn: null, attempts: 0, disabled: [] };
+    }
+    assertDisableLimit(toDisableNow, maxDisable, log);
+    // 写 managed：既有 managed 集合 + 本次新增（探针行保持禁用态不变）
+    writeManaged(patchPath, new Set([...managedIds, ...toDisableNow]));
+    if (toDisableNow.size) log('[dsh-error-tell] 已禁用 → ' + patchPath + ': ' + [...toDisableNow].join(', '));
 
-  let last = null;
-  let attempts = 0;
-  let newFailures = [];
-  for (let attempt = 0; attempt <= restartLimit; attempt++) {
-    attempts = attempt + 1;
-    if (attempt > 0) {
-      const why = newFailures.length ? newFailures.join(", ") : "（stderr 归因）";
-      log("[dsh-error-tell] 重启 " + attempt + "/" + restartLimit + "（新禁用: " + why + "）");
+    let last = null;
+    let attempts = 0;
+    let newFailures = [];
+    for (let attempt = 0; attempt <= restartLimit; attempt++) {
+      attempts = attempt + 1;
+      if (attempt > 0) {
+        const why = newFailures.length ? newFailures.join(', ') : '（stderr 归因）';
+        log('[dsh-error-tell] 重启 ' + attempt + '/' + restartLimit + '（新禁用: ' + why + '）');
+      }
+      // 参数顺序：--patch 是 launcher 选项，必须排在 --port（app 内层参数起点）之前
+      const args = ["--profile", profile];
+      if (probePatchFile) args.push('--patch', probePatchFile);
+      if (port !== undefined && port !== null && port !== '') args.push('--port', String(port));
+      args.push(...extraArgs);
+      last = await runDsh(dshBin, args, { env, timeoutMs, quitAfterMs });
+      if (last.quit || (last.code !== null && NORMAL_EXITS.has(last.code))) {
+        if (last.quit) log('[dsh-error-tell] 服务正常运行中（测试 quit 钩子触发）');
+        else log('[dsh-error-tell] dsh 正常结束（exit ' + last.code + '）');
+        // 探针成功 → 自动恢复：账本标记 + 从 managed 段移除
+        if (probeIds.size) {
+          const restored = [];
+          for (const id of probeIds) if (restoreQuarantine(home, id)) restored.push(id);
+          writeManaged(patchPath, new Set([...managedIds].filter(id => !probeIds.has(id))));
+          log('[dsh-error-tell] 探针成功，已自动恢复: ' + (restored.join(', ') || '(managed 已移除)'));
+        }
+        break;
+      }
+      if (last.code !== null && !NORMAL_EXITS.has(last.code)) {
+        const tail = (last.stderr || '').slice(-600);
+        log('[dsh-error-tell] dsh 启动失败 exit=' + last.code + ' stderrLen=' + (last.stderr || '').length + (tail ? '\n  stderr tail: ' + tail.replace(/\n/g, '\n  ') : ''));
+      }
+      // 归因必须先于 restartLimit 判定：restart-limit 0 时失败也要记账/禁用
+      newFailures = inferFailures(last.stderr || "", rows).filter(id => !toDisableNow.has(id));
+      for (const id of newFailures) {
+        addQuarantine(home, { rowId: id, stage: 'runtime', error: 'dsh 启动失败（见 stderr）', source: 'boot-guard-restart' });
+        const n = failureCount(home, id);
+        if (decideDisable(1, n - 1, threshold)) {
+          toDisableNow.add(id);
+          log('[dsh-error-tell] ' + id + ' 第' + n + '次失败 → 禁用');
+        } else log('[dsh-error-tell] ' + id + ' 第' + n + '次失败（观察中，未禁用）');
+      }
+      writeManaged(patchPath, new Set([...managedIds, ...toDisableNow]));
+      // 归因命中探针行：从探针覆盖中剔除（否则重启仍会覆盖启用该行）
+      if (probePatchFile && newFailures.some(id => probeIds.has(id))) {
+        const remaining = new Set([...probeIds].filter(id => !toDisableNow.has(id)));
+        try { unlinkSync(probePatchFile); } catch { /* 忽略 */ }
+        probePatchFile = writeProbePatch(remaining, probeDir);
+      }
+      if (attempt === restartLimit) break;
+      if (!newFailures.length) { log('[dsh-error-tell] 无法从 stderr 归因失败行，熔断不循环'); break; }
     }
-    last = await runDsh(dshBin, spawnArgs, { env, timeoutMs, quitAfterMs });
-    if (last.quit) { log("[dsh-error-tell] 服务正常运行中（测试 quit 钩子触发）"); break; }
-    if (last.code !== null && NORMAL_EXITS.has(last.code)) { log("[dsh-error-tell] dsh 正常结束（exit " + last.code + "）"); break; }
-    if (last.code !== null && !NORMAL_EXITS.has(last.code)) {
-      const tail = (last.stderr || '').slice(-600);
-      log('[dsh-error-tell] dsh 启动失败 exit=' + last.code + ' stderrLen=' + (last.stderr || '').length + (tail ? '\n  stderr tail: ' + tail.replace(/\n/g, '\n  ') : ''));
-    }
-    if (attempt === restartLimit) break;
-    newFailures = inferFailures(last.stderr || "", rows).filter(id => !toDisable.has(id));
-    if (!newFailures.length) { log("[dsh-error-tell] 无法从 stderr 归因失败行，熔断不循环"); break; }
-    for (const id of newFailures) {
-      toDisable.add(id);
-      addQuarantine(home, { rowId: id, stage: 'runtime', error: 'dsh 启动失败（见 stderr）', source: 'boot-guard-restart' });
-    }
-    writeManaged(homePatchPath(home), toDisable);
+    return { rows, issues, toDisable: [...toDisableNow], probeIds: [...probeIds], spawn: last, attempts, disabled: [...toDisableNow] };
+  } finally {
+    if (probePatchFile) try { unlinkSync(probePatchFile); } catch { /* 忽略 */ }
   }
-  return { rows, issues, toDisable: [...toDisable], spawn: last, attempts, disabled: [...toDisable] };
 }

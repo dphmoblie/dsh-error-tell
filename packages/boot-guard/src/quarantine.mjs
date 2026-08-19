@@ -26,12 +26,20 @@ export function addQuarantine(home, entry) {
   const ledger = loadLedger(home);
   const existing = ledger.entries.find(e => e.rowId === entry.rowId && !e.restoredAt);
   if (existing) {
-    Object.assign(existing, entry, { at: existing.at });
+    // 同一活动条目：累计连续失败次数（S2：连续 2 次失败才真正禁用）
+    const failCount = (existing.failCount ?? 1) + 1;
+    Object.assign(existing, entry, { at: existing.at, failCount });
   } else {
-    ledger.entries.push({ ...entry, at: entry.at ?? new Date().toISOString() });
+    ledger.entries.push({ ...entry, at: entry.at ?? new Date().toISOString(), failCount: 1 });
   }
   saveLedger(home, ledger);
   return ledger;
+}
+
+/** 某行当前活动条目的累计失败次数（无活动条目时为 0）。 */
+export function failureCount(home, rowId) {
+  const e = loadLedger(home).entries.find(x => x.rowId === rowId && !x.restoredAt);
+  return e?.failCount ?? 0;
 }
 
 export function restoreQuarantine(home, rowId) {

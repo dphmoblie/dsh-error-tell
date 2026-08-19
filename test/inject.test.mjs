@@ -53,6 +53,33 @@ test('注入脚本：提取失败插件名 → 渲染按钮', async () => {
   assert.equal(row1.children[0].textContent, 'another:bad');
   assert.equal(panel.children[3].textContent, '全部禁用并重载');
 });
+test('注入脚本：正常页面且有被禁用插件时渲染恢复面板', async () => {
+  const dom = makeDom([], null);
+  const doc = {
+    readyState: 'complete', documentElement: {}, body: { children: [], appendChild(c) { this.children.push(c); c.parentElement = this; } },
+    createElement: (t2) => element(t2),
+    querySelectorAll: () => dom.root.querySelectorAll(),
+    addEventListener() {}
+  };
+  const sandbox = {
+    document: doc, location: { reload() {} }, alert() {},
+    MutationObserver: class { observe() {} },
+    fetch: (url) => {
+      if (url.includes('/status')) return Promise.resolve({ json: () => Promise.resolve({ ok: true, disabled: [{ rowId: 'x-bad', source: 'runtime-guard' }] }) });
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true }) });
+    },
+    setTimeout, clearTimeout
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(INJECT_SCRIPT, sandbox);
+  await new Promise(r2 => setTimeout(r2, 2600));
+  const panel = doc.body.children[0];
+  assert.ok(panel, '恢复面板已渲染');
+  assert.ok(panel.children[0].textContent.includes('被禁用'), '标题含禁用信息');
+  const row = panel.children[1];
+  assert.ok(row.children[0].textContent.includes('x-bad'), '列出被禁用行');
+  assert.equal(row.children[1].textContent, '恢复并重载');
+});
 test('注入脚本：无失败时不渲染面板', async () => {
   const dom = makeDom([], null);
   const doc = {
