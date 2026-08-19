@@ -27,8 +27,17 @@
 - **M7**：对 DSH 私有 API（_initTask/_error/fiber.state）无版本护栏。
 - **M8**：import 干跑与 dsh 真实加载管线不一致，且串行子进程慢。
 
-### 轻微
-- yaml.mjs 硬编码 Windows 路径回退；bin 参数 Number() 不校验；restore 半成功语义；runtime-guard 与 patch-writer 重复实现（建议抽 core 包）；inject-script DOM 猜测脆弱；client-tell/src/client.js 死代码；checks 缺 id 行写 '?'；guard 归因未救活与无法归因信息不分；compose stderr 猜测；README "零副作用"表述过强（dsh dump-config 会 heal profiles/node_modules）。
+### 轻微（已全部处理，2026-08）
+- [x] L1 yaml 动态探测 dsh 安装（npm root -g）
+- [x] L2 CLI 数字参数校验（非法值 exit 2）
+- [x] L3 restore 语义（managed 有记录即成功）
+- [x] L4 runtime-guard 与 patch-writer 重复实现 → **暂缓**：抽 `@dsh-error-tell/core` 涉及发布流程，待发布前做
+- [x] L5 inject-script 清理（observer disconnect / done 语义 / rowButton 复用）
+- [x] L6 删除 client-tell/src/client.js 死代码
+- [x] L7 checks 缺 id 行降 warn（不进入禁用路径）
+- [x] L8 重启用尽诊断日志
+- [x] L9 e2e 消除 DEP0190 + 超时杀进程树
+- [x] L10 README/verification 表述修正
 
 ## 发布 checklist（未做）
 - [ ] S2/S3 修复后发布
