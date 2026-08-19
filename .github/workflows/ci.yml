@@ -1,10 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
+  workflow_dispatch:  # 仅手动触发（在 Actions 页面点 Run workflow）
 
 # 同一分支/PR 新提交自动取消旧 run，避免排队重复安装 dsh（npm i -g 需拉几十个 @deepseek-ai 包）
 concurrency:
