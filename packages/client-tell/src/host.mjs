@@ -109,10 +109,13 @@ export function apply(ctx) {
         const seen = new Set();
         for (const e of activeQuarantine(home)) {
           seen.add(e.rowId);
-          disabled.push({ rowId: e.rowId, package: e.package, stage: e.stage, source: e.source, failCount: e.failCount ?? 1, at: e.at });
+          // 建议3：标注是否真实禁用（managed 段内 = 已禁用；否则仅记录）
+          disabled.push({ rowId: e.rowId, package: e.package, stage: e.stage, source: e.source, failCount: e.failCount ?? 1, at: e.at, disabled: managed.ids.has(e.rowId) });
         }
-        for (const id of managed.ids) if (!seen.has(id)) disabled.push({ rowId: id, source: 'managed' });
-        return json(res, 200, { ok: true, disabled, total: ledger.entries.length });
+        for (const id of managed.ids) if (!seen.has(id)) disabled.push({ rowId: id, source: 'managed', disabled: true });
+        // 环境/批量问题提示（最近活动记录中是否存在）
+        const environmentIssue = ledger.entries.slice(-20).some(e2 => !e2.restoredAt && /-batch|-env/.test(e2.source || ''));
+        return json(res, 200, { ok: true, disabled, total: ledger.entries.length, environmentIssue });
       } catch (e) {
         return json(res, 500, { ok: false, error: String(e && e.message || e) });
       }

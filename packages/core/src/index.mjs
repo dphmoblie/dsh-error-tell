@@ -223,12 +223,38 @@ export function isProtected(rowId, pkgName) {
 export function isPendingLikeError(message) {
   return /pending|waiting for service|did not activate/i.test(String(message || ''));
 }
+
+/**
+ * 环境类错误：端口占用/资源冲突/上下文未激活等，不是插件自身问题，不归因不禁用。
+ */
+const ENV_ERROR_PATTERNS = /EADDRINUSE|already in use|inactive context|cannot create effect on inactive|already owned by process|EACCES|EPERM|ENOSPC|ECONNREFUSED|EADDRNOTAVAIL/i;
+export function isEnvError(message) {
+  return ENV_ERROR_PATTERNS.test(String(message || ''));
+}
+
+/**
+ * 批量失败阈值：单次启动失败数达到该值视为环境/级联问题（如多实例抢端口），
+ * 此时全部只记账不自动禁用。可用环境变量 DSH_ERROR_TELL_BATCH_THRESHOLD 覆盖。
+ */
+export function batchThreshold() {
+  return Number(process.env.DSH_ERROR_TELL_BATCH_THRESHOLD || 5);
+}
 /**
  * 记录一次失败：账本必写（可审计）；managed 禁用数达到 maxDisable 时熔断（跳过写 managed，返回 false）。
  */
-export function recordFailure(home, patchPath, { rowId, pkg, stage, error, source = 'runtime-guard', maxDisable = 5, log = () => {} }) {
+export function recordFailure(home, patchPath, { rowId, pkg, stage, error, source = 'runtime-guard', maxDisable = 5, batchCount = 1, log = () => {} }) {
   if (!rowId) return false;
   if (isPendingLikeError(error)) return false; // pending 不是插件失败，不归因
+  if (isEnvError(error)) {
+    log('[dsh-error-tell] 环境类错误（不归因插件）: ' + rowId + ' — ' + String(error).split('\n')[0]);
+    addQuarantine(home, { rowId, package: pkg, stage, error: String(error).split('\n')[0] + '（环境类错误未禁用）', source: source + '-env' });
+    return false;
+  }
+  if (batchCount >= batchThreshold()) {
+    log('[dsh-error-tell] 批量失败熔断：本次启动已失败 ' + batchCount + ' 个（疑似环境/级联问题），' + rowId + ' 只记账不禁用');
+    addQuarantine(home, { rowId, package: pkg, stage, error: String(error).split('\n')[0] + '（批量失败熔断未禁用）', source: source + '-batch' });
+    return false;
+  }
   const allowProtected = process.env.DSH_ERROR_TELL_ALLOW_PROTECTED === '1';
   if (!allowProtected && isProtected(rowId, pkg)) {
     log('[dsh-error-tell] 保护名单：拒绝自动禁用核心服务 ' + rowId + '（只记账，请人工确认）');

@@ -70,7 +70,7 @@ test('注入脚本：正常页面常驻徽标，有禁用时点击展开恢复�
     document: doc, location: { reload() {} }, alert() {},
     MutationObserver: class { observe() {} },
     fetch: (url) => {
-      if (url.includes('/status')) return Promise.resolve({ json: () => Promise.resolve({ ok: true, disabled: [{ rowId: 'x-bad', source: 'runtime-guard' }], total: 3 }) });
+      if (url.includes('/status')) return Promise.resolve({ json: () => Promise.resolve({ ok: true, disabled: [{ rowId: 'x-bad', source: 'runtime-guard', disabled: true }, { rowId: 'y-note', source: 'runtime-guard-protected', disabled: false }], total: 3, environmentIssue: false }) });
       return Promise.resolve({ json: () => Promise.resolve({ ok: true }) });
     },
     setTimeout, clearTimeout
@@ -89,7 +89,8 @@ test('注入脚本：正常页面常驻徽标，有禁用时点击展开恢复�
   assert.ok(rowText.includes('x-bad'), '面板列出被禁用行: ' + rowText);
   assert.equal(panel.children[1].children[1].textContent, '恢复并重载');
   assert.equal(panel.children[2].textContent, '全部恢复并重载', '面板含全部恢复按钮');
-  assert.ok(panel.children[3].textContent.includes('端点'), '面板含端点状态');
+  assert.ok(panel.children.some(ch => ch.textContent.includes('端点')), '面板含端点状态');
+  assert.ok(panel.children.some(ch => ch.textContent.includes('条仅记录')), '面板含仅记录折叠行');
 });
 
 test('注入脚本：拖动徽标后点击不展开面板（拖拽 vs 点击区分）', async () => {
@@ -129,7 +130,7 @@ test('注入脚本：全部恢复依次调用 restore 并重载', async () => {
     document: doc, location: { reload() { reloaded = true; } }, alert() {},
     MutationObserver: class { observe() {} },
     fetch: (url, opts) => {
-      if (url.includes('/status')) return Promise.resolve({ json: () => Promise.resolve({ ok: true, disabled: [{ rowId: 'a-bad' }, { rowId: 'b-bad' }], total: 2 }) });
+      if (url.includes('/status')) return Promise.resolve({ json: () => Promise.resolve({ ok: true, disabled: [{ rowId: 'a-bad', disabled: true }, { rowId: 'b-bad', disabled: true }], total: 2 }) });
       if (url.includes('/restore')) { posts.push(JSON.parse(opts.body).rowId); return Promise.resolve({ json: () => Promise.resolve({ ok: true }) }); }
       return Promise.resolve({ json: () => Promise.resolve({ ok: true }) });
     },

@@ -1,5 +1,5 @@
 // runtime-guard：宿主运行时看门狗。落盘逻辑统一复用 @dsh-error-tell/core（L4）。
-import { countManaged, recordFailure, readManaged, syncDisable, writeManaged } from '@dsh-error-tell/core';
+import { countManaged, recordFailure, readManaged, syncDisable, writeManaged, restoreQuarantine, batchThreshold } from '@dsh-error-tell/core';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -17,11 +17,25 @@ export function apply(ctx) {
   const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 5);
   const seen = new Set();
 
+  let batchReverted = false;
   const record = (rowId, pkg, stage, error) => {
     if (seen.has(rowId) || rowId === SELF) return;
     seen.add(rowId);
     try {
-      const disabled = recordFailure(home, patchPath, { rowId, pkg, stage, error, source: 'runtime-guard', maxDisable, log: (m) => ctx.logger?.error?.(m) });
+      // 批量失败熔断：达到阈值时撤销本进程已写 managed 的禁用（级联故障不误杀）
+      if (seen.size >= batchThreshold() && !batchReverted) {
+        batchReverted = true;
+        const managed = readManaged(patchPath);
+        for (const id of seen) {
+          if (managed.ids.has(id)) {
+            managed.ids.delete(id);
+            restoreQuarantine(home, id);
+          }
+        }
+        writeManaged(patchPath, managed.ids);
+        ctx.logger?.error?.('[dsh-error-tell] 批量失败熔断：撤销本进程已写的 managed 禁用（疑似环境/级联问题）');
+      }
+      const disabled = recordFailure(home, patchPath, { rowId, pkg, stage, error, source: 'runtime-guard', maxDisable, batchCount: seen.size, log: (m) => ctx.logger?.error?.(m) });
       ctx.logger?.error?.(disabled
         ? '[dsh-error-tell] 已禁用问题插件 ' + rowId + '（' + stage + '），重启后生效'
         : '[dsh-error-tell] 已记录 ' + rowId + '（' + stage + '），但未写入 managed 禁用');

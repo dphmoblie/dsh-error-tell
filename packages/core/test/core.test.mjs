@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
-import { writeManaged, readManaged, assertPatchParseable, isProtected, isPendingLikeError, recordFailure, syncDisable } from '../src/index.mjs';
+import { writeManaged, readManaged, assertPatchParseable, isProtected, isPendingLikeError, isEnvError, recordFailure, syncDisable } from '../src/index.mjs';
 
 const _require = createRequire(import.meta.url);
 const yaml = _require('js-yaml');
@@ -90,6 +90,33 @@ test('recordFailure：保护名单命中只记账不写 managed；pending 错误
   const ok2 = recordFailure(home2, p2, { rowId: 'some-ui', pkg: '@x/ui', stage: 'apply', error: 'pending (waiting for service: typert)' });
   assert.equal(ok2, false, 'pending 不记录');
   assert.ok(!existsSync(join(home2, 'state', 'dsh-error-tell', 'quarantine.json')), 'pending 未写账本');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('isEnvError 判定', () => {
+  assert.equal(isEnvError('EADDRINUSE: address already in use 127.0.0.1:3080'), true);
+  assert.equal(isEnvError('Error: cannot create effect on inactive context'), true);
+  assert.equal(isEnvError('task-board ledger is already owned by process 36980'), true);
+  assert.equal(isEnvError('apply failed: boom'), false);
+});
+
+test('recordFailure：环境类错误只记账 -env；批量达到阈值只记账 -batch', () => {
+  const dir = tmpDir();
+  const home = join(dir, 'home');
+  const p = join(home, 'cordis.patch.yml');
+  const logs = [];
+  // 环境错误
+  const ok1 = recordFailure(home, p, { rowId: 'ui-x', pkg: '@x/ui', stage: 'apply', error: 'EADDRINUSE: address already in use', log: m => logs.push(m) });
+  assert.equal(ok1, false, '环境错误不禁用');
+  assert.ok(!existsSync(p), '未写 managed');
+  // 批量阈值（batchCount >= 5）
+  const ok2 = recordFailure(home, p, { rowId: 'ui-y', pkg: '@x/ui2', stage: 'apply', error: 'boom', batchCount: 5, log: m => logs.push(m) });
+  assert.equal(ok2, false, '批量熔断不禁用');
+  assert.ok(!existsSync(p), '批量熔断未写 managed');
+  // 账本应记录两条（-env 与 -batch）
+  const ledger = JSON.parse(readFileSync(join(home, 'state', 'dsh-error-tell', 'quarantine.json'), 'utf8'));
+  const sources = ledger.entries.map(e2 => e2.source);
+  assert.ok(sources.includes('runtime-guard-env') && sources.includes('runtime-guard-batch'), 'source 标注正确: ' + sources.join(','));
   rmSync(dir, { recursive: true, force: true });
 });
 

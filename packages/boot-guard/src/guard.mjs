@@ -6,7 +6,7 @@ import { runChecks } from './checks.mjs';
 import { loadLedger, addQuarantine, activeQuarantine, restoreQuarantine, failureCount } from './quarantine.mjs';
 import { readManaged, writeManaged } from './patch-writer.mjs';
 import { dshHome, homePatchPath } from './home.mjs';
-import { isProtected, isPendingLikeError, assertPatchParseable } from '@dsh-error-tell/core';
+import { isProtected, isPendingLikeError, isEnvError, assertPatchParseable, batchThreshold } from '@dsh-error-tell/core';
 
 export const SELF_IDS = new Set(['error-tell-runtime', 'error-tell-client-host']);
 export const NORMAL_EXITS = new Set([0, 130, 143]);
@@ -36,7 +36,7 @@ function escapeRegExp(s) { return s.replace(/\$/g, "\\$").replace(/[.*+?^{}()|[\
  */
 export function inferFailures(stderr, rows) {
   // 事故修复：pending（依赖未满足）不是插件自身失败，相关行不参与归因
-  const s = (stderr || '').split(/\r?\n/).filter(l => !isPendingLikeError(l)).join('\n');
+  const s = (stderr || '').split(/\r?\n/).filter(l => !isPendingLikeError(l) && !isEnvError(l)).join('\n');
   const hits = new Set();
   for (const row of rows) {
     if (!row.id || !row.name || SELF_IDS.has(row.id)) continue;
@@ -111,9 +111,17 @@ export async function guard(opts = {}) {
     // 本次预检失败：计算连续失败判定（dry-run 只计算不落盘，保证零副作用）
     const toDisableNow = new Set();
     const preFailures = [];
+    // 批量失败熔断：单次预检失败数达到阈值视为环境/级联问题，全部只记账
+    const batchMode = failures.length >= batchThreshold();
+    if (batchMode) log('[dsh-error-tell] 批量失败熔断：本次预检失败 ' + failures.length + ' 个（疑似环境/级联问题），全部只记账不禁用');
     for (const f of failures) {
       const prior = failureCount(home, f.rowId);
       const n = prior + 1;
+      if (batchMode || isEnvError(f.message)) {
+        log('  [第' + n + '次失败] ' + f.rowId + (batchMode ? '（批量熔断：只记账）' : '（环境类错误：不归因）'));
+        preFailures.push(f);
+        continue;
+      }
       if (isProtected(f.rowId, f.package)) {
         log('  [第' + n + '次失败] ' + f.rowId + '（保护名单：只记账，绝不自动禁用）');
         preFailures.push(f);
@@ -176,9 +184,16 @@ export async function guard(opts = {}) {
       }
       // 归因必须先于 restartLimit 判定：restart-limit 0 时失败也要记账/禁用
       newFailures = inferFailures(last.stderr || "", rows).filter(id => !toDisableNow.has(id));
+      const batchMode = newFailures.length >= batchThreshold();
+      if (batchMode) log('[dsh-error-tell] 批量失败熔断：本次归因 ' + newFailures.length + ' 个（疑似环境/级联问题），全部只记账不禁用');
       for (const id of newFailures) {
         const row = rows.find(r2 => r2.id === id);
         const pkgName = row?.name;
+        if (batchMode) {
+          addQuarantine(home, { rowId: id, package: pkgName, stage: 'runtime', error: 'dsh 启动失败（见 stderr）（批量熔断未禁用）', source: 'boot-guard-restart-batch' });
+          log('[dsh-error-tell] ' + id + '（批量熔断：只记账）');
+          continue;
+        }
         if (isProtected(id, pkgName)) {
           addQuarantine(home, { rowId: id, package: pkgName, stage: 'runtime', error: 'dsh 启动失败（见 stderr）（保护名单未禁用）', source: 'boot-guard-restart-protected' });
           log('[dsh-error-tell] ' + id + '（保护名单：只记账，绝不自动禁用）');
