@@ -9,8 +9,10 @@ function element(tag) {
     tagName: tag, textContent: '', style: {}, children: [], parentElement: null,
     appendChild(c) { this.children.push(c); c.parentElement = this; return c; },
     addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+    _handlers: handlers,
     remove() { const p = this.parentElement; if (p) { const i = p.children.indexOf(this); if (i >= 0) p.children.splice(i, 1); } this.parentElement = null; },
     click() { (handlers.click || []).forEach(fn => fn()); },
+    getBoundingClientRect() { return { left: 0, top: 0, width: 0, height: 0 }; },
     setAttribute() {}
   };
 }
@@ -22,11 +24,14 @@ function makeDom() {
 }
 
 function makeDoc(dom) {
+  const listeners = {};
   return {
     readyState: 'complete', documentElement: {}, body: { children: [], appendChild(c) { this.children.push(c); c.parentElement = this; } },
     createElement: (t2) => element(t2),
     querySelectorAll: () => dom.root.querySelectorAll(),
-    addEventListener() {}
+    listeners,
+    addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
+    removeEventListener(type, fn) { const a = listeners[type] || []; const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }
   };
 }
 
@@ -86,6 +91,34 @@ test('注入脚本：正常页面常驻徽标，有禁用时点击展开恢复�
   assert.ok(panel.children[2].textContent.includes('端点'), '面板含端点状态');
 });
 
+test('注入脚本：拖动徽标后点击不展开面板（拖拽 vs 点击区分）', async () => {
+  const dom = makeDom();
+  const doc = makeDoc(dom);
+  const sandbox = {
+    document: doc, location: { reload() {} }, alert() {},
+    MutationObserver: class { observe() {} },
+    fetch: () => Promise.resolve({ json: () => Promise.resolve({ ok: true, disabled: [], total: 0 }) }),
+    setTimeout, clearTimeout
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(INJECT_SCRIPT, sandbox);
+  await new Promise(r => setTimeout(r, 2600));
+  const badge = doc.body.children[0];
+  assert.ok(badge, '徽标已渲染');
+  // 模拟拖拽：mousedown → mousemove(>3px) → mouseup
+  const md = badge._handlers.mousedown[0];
+  const ev = { clientX: 100, clientY: 100, preventDefault() {} };
+  md(ev);
+  const mm = doc.listeners.mousemove[0];
+  mm({ clientX: 160, clientY: 120 });
+  const mu = doc.listeners.mouseup[0];
+  mu({ clientX: 160, clientY: 120 });
+  badge.click();
+  assert.equal(doc.body.children.length, 1, '拖拽后点击不展开面板');
+  // 再点一次（非拖拽）应展开
+  badge.click();
+  assert.equal(doc.body.children.length, 2, '普通点击展开面板');
+});
 test('注入脚本：无禁用时徽标显示正常，面板显示无异常', async () => {
   const dom = makeDom();
   const doc = makeDoc(dom);
