@@ -88,7 +88,8 @@ test('注入脚本：正常页面常驻徽标，有禁用时点击展开恢复�
   const rowText = panel.children[1].children[0].textContent;
   assert.ok(rowText.includes('x-bad'), '面板列出被禁用行: ' + rowText);
   assert.equal(panel.children[1].children[1].textContent, '恢复并重载');
-  assert.ok(panel.children[2].textContent.includes('端点'), '面板含端点状态');
+  assert.equal(panel.children[2].textContent, '全部恢复并重载', '面板含全部恢复按钮');
+  assert.ok(panel.children[3].textContent.includes('端点'), '面板含端点状态');
 });
 
 test('注入脚本：拖动徽标后点击不展开面板（拖拽 vs 点击区分）', async () => {
@@ -118,6 +119,34 @@ test('注入脚本：拖动徽标后点击不展开面板（拖拽 vs 点击区�
   // 再点一次（非拖拽）应展开
   badge.click();
   assert.equal(doc.body.children.length, 2, '普通点击展开面板');
+});
+test('注入脚本：全部恢复依次调用 restore 并重载', async () => {
+  const dom = makeDom();
+  const doc = makeDoc(dom);
+  let reloaded = false;
+  const posts = [];
+  const sandbox = {
+    document: doc, location: { reload() { reloaded = true; } }, alert() {},
+    MutationObserver: class { observe() {} },
+    fetch: (url, opts) => {
+      if (url.includes('/status')) return Promise.resolve({ json: () => Promise.resolve({ ok: true, disabled: [{ rowId: 'a-bad' }, { rowId: 'b-bad' }], total: 2 }) });
+      if (url.includes('/restore')) { posts.push(JSON.parse(opts.body).rowId); return Promise.resolve({ json: () => Promise.resolve({ ok: true }) }); }
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true }) });
+    },
+    setTimeout, clearTimeout
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(INJECT_SCRIPT, sandbox);
+  await new Promise(r => setTimeout(r, 2600));
+  const badge = doc.body.children[0];
+  badge.click();
+  const panel = doc.body.children[1];
+  const allBtn = panel.children[panel.children.length - 2]; // meta 前一个
+  assert.equal(allBtn.textContent, '全部恢复并重载');
+  allBtn.click();
+  await new Promise(r => setTimeout(r, 300));
+  assert.deepEqual(posts.sort(), ['a-bad', 'b-bad'], '依次调用 restore');
+  assert.ok(reloaded, '全部成功后重载');
 });
 test('注入脚本：无禁用时徽标显示正常，面板显示无异常', async () => {
   const dom = makeDom();
