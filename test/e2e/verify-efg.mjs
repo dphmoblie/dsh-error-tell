@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { linkProfile } from './link-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -39,8 +40,7 @@ const profileE = join(homeE, 'profiles', 'web');
   writeFileSync(join(profileE, 'package.json'), JSON.stringify({ name: 'dsh-profile-web', private: true, dependencies: {}, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } } }, null, 2) + '\n');
   writeFileSync(join(profileE, 'cordis.yml'), '[]\n'); // 无 profile patch（干净）
 const envE = { ...process.env, DSH_HOME: homeE, DSH_TELEMETRY_DISABLED: '1' };
-const instE = await run('pnpm', ['install', '--offline'], { cwd: join(homeE, 'profiles', 'web'), timeoutMs: 60000 });
-ok(instE.code === 0, '[E] pnpm install exit=' + instE.code);
+ok(true, '[E] 无依赖沙箱（跳过安装）');
 const gE = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envE, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 60000 });
 const jE = JSON.parse((gE.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 ok(jE.ok === true && jE.attempts === 1 && jE.disabled.length === 0, '[E] 干净 profile 一次启动成功，未禁用任何行（attempts=' + jE.attempts + '）');
@@ -64,8 +64,11 @@ mkProfile(homeG, {
   '@dsh-error-tell/fixture-bad-apply': fileDep('packages/test-fixtures/bad-apply')
 }, ['- insert:', '    - id: fixture-bad-import', "      name: '@dsh-error-tell/fixture-bad-import'", '    - id: fixture-bad-apply', "      name: '@dsh-error-tell/fixture-bad-apply'"]);
 const envG = { ...process.env, DSH_HOME: homeG, DSH_TELEMETRY_DISABLED: '1' };
-const instG = await run('pnpm', ['install', '--offline'], { cwd: join(homeG, 'profiles', 'web'), timeoutMs: 60000 });
-ok(instG.code === 0, '[G] pnpm install exit=' + instG.code);
+linkProfile(join(homeG, 'profiles', 'web'), {
+  '@dsh-error-tell/fixture-bad-import': 'packages/test-fixtures/bad-import',
+  '@dsh-error-tell/fixture-bad-apply': 'packages/test-fixtures/bad-apply'
+});
+ok(true, '[G] 沙箱依赖已链接（junction）');
 const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '2'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 120000 });
 const jG = JSON.parse((gG.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 // S2 语义：import 坏行预检命中，apply 坏行第 1 次启动才暴露（观察中），第 2 次重启后禁用，第 3 次启动成功

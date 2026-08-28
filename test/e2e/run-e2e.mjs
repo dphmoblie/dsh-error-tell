@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { linkProfile } from './link-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -51,8 +52,8 @@ writeFileSync(join(profileDir, 'cordis.patch.yml'), [
 writeFileSync(join(profileDir, 'cordis.yml'), '[]\n', 'utf8');
 
 // 2) 安装 fixture（file: 依赖，offline）
-const inst = await run('pnpm', ['install', '--offline'], { cwd: profileDir, timeoutMs: 90000 });
-ok(inst.code === 0, 'pnpm install fixture（offline）exit=' + inst.code + (inst.code === 0 ? '' : ' :: ' + (inst.stderr || '').slice(0, 400)));
+linkProfile(profileDir, { '@dsh-error-tell/fixture-bad-apply': 'packages/test-fixtures/bad-apply' });
+ok(true, '沙箱依赖已链接（junction）');
 ok(existsSync(join(profileDir, 'node_modules', '@dsh-error-tell', 'fixture-bad-apply', 'index.mjs')), 'fixture 已链接到 profile node_modules');
 
 // 3) dump-config 能看到 fixture 行
@@ -117,8 +118,12 @@ writeFileSync(join(profileB, 'cordis.patch.yml'), [
 ].join('\n'), 'utf8');
 writeFileSync(join(profileB, 'cordis.yml'), '[]\n', 'utf8');
 const envB = { ...env, DSH_HOME: homeB };
-const instB = await run('pnpm', ['install', '--offline'], { cwd: profileB, timeoutMs: 90000 });
-ok(instB.code === 0, '[B] pnpm install（offline）exit=' + instB.code);
+linkProfile(profileB, {
+  '@dsh-error-tell/runtime-guard': 'packages/runtime-guard',
+  '@dsh-error-tell/core': 'packages/core',
+  '@dsh-error-tell/fixture-bad-apply': 'packages/test-fixtures/bad-apply'
+});
+ok(true, '[B] 沙箱依赖已链接（junction）');
 const bootB = await run('dsh', ['--profile', 'web', '--port', '0'], { env: envB, timeoutMs: 90000 });
 ok(bootB.code === 1, '[B] 坏插件启动失败（exit 1）');
 let rgLedger = null;
@@ -150,8 +155,12 @@ writeFileSync(join(profileC, 'cordis.patch.yml'), [
 ].join('\n'), 'utf8');
 writeFileSync(join(profileC, 'cordis.yml'), '[]\n', 'utf8');
 const envC = { ...env, DSH_HOME: homeC };
-const instC = await run('pnpm', ['install', '--offline'], { cwd: profileC, timeoutMs: 90000 });
-ok(instC.code === 0, '[C] pnpm install（offline）exit=' + instC.code);
+linkProfile(profileC, {
+  '@dsh-error-tell/client-tell': 'packages/client-tell',
+  '@dsh-error-tell/core': 'packages/core',
+  '@dsh-error-tell/fixture-bad-client': 'packages/test-fixtures/bad-client'
+});
+ok(true, '[C] 沙箱依赖已链接（junction）');
 const serverC = spawn('dsh', ['--profile', 'web', '--port', String(PORT_C)], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' }, windowsHide: true, shell: true });
 let serverOut = '', serverErr = '';
 serverC.stdout?.on('data', d => serverOut += d);
@@ -202,8 +211,8 @@ writeFileSync(join(profileD, 'cordis.patch.yml'), [
 ].join('\n'), 'utf8');
 writeFileSync(join(profileD, 'cordis.yml'), '[]\n', 'utf8');
 const envD = { ...env, DSH_HOME: homeD };
-const instD = await run('pnpm', ['install', '--offline'], { cwd: profileD, timeoutMs: 90000 });
-ok(instD.code === 0, '[D] pnpm install exit=' + instD.code);
+linkProfile(profileD, { '@dsh-error-tell/fixture-bad-import': 'packages/test-fixtures/bad-import' });
+ok(true, '[D] 沙箱依赖已链接（junction）');
 const dryD = await run('node', [BIN, 'guard', '--profile', 'web', '--dry-run'], { env: envD, timeoutMs: 60000 });
 ok(dryD.stdout.includes('[error/import] fixture-bad-import'), '[D] dry-run 预检发现 import 失败行');
 const gD = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envD, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 90000 });
@@ -223,8 +232,7 @@ writeFileSync(join(profileE, 'package.json'), JSON.stringify({
 // 不写 cordis.patch.yml：注释-only 的 patch 不是合法顶层数组，缺失即视为干净
 writeFileSync(join(profileE, 'cordis.yml'), '[]\n', 'utf8');
 const envE = { ...env, DSH_HOME: homeE };
-const instE = await run('pnpm', ['install', '--offline'], { cwd: profileE, timeoutMs: 90000 });
-ok(instE.code === 0, '[E] pnpm install exit=' + instE.code);
+ok(true, '[E] 无依赖沙箱（跳过安装）');
 const gE = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envE, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 90000 });
 const jE = JSON.parse((gE.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 ok(jE.ok === true && jE.attempts === 1 && jE.disabled.length === 0, '[E] 干净 profile：一次启动成功，未禁用任何行');
@@ -262,8 +270,11 @@ writeFileSync(join(profileG, 'cordis.patch.yml'), [
 ].join('\n'), 'utf8');
 writeFileSync(join(profileG, 'cordis.yml'), '[]\n', 'utf8');
 const envG = { ...env, DSH_HOME: homeG };
-const instG = await run('pnpm', ['install', '--offline'], { cwd: profileG, timeoutMs: 90000 });
-ok(instG.code === 0, '[G] pnpm install exit=' + instG.code);
+linkProfile(profileG, {
+  '@dsh-error-tell/fixture-bad-import': 'packages/test-fixtures/bad-import',
+  '@dsh-error-tell/fixture-bad-apply': 'packages/test-fixtures/bad-apply'
+});
+ok(true, '[G] 沙箱依赖已链接（junction）');
 const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '2'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 180000 });
 const jG = JSON.parse((gG.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 // S2 语义：import 坏行预检命中，apply 坏行第 1 次启动才暴露（观察中），第 2 次重启后禁用，第 3 次启动成功
@@ -289,8 +300,8 @@ writeFileSync(join(profileH, 'cordis.patch.yml'), [
 ].join('\n'), 'utf8');
 writeFileSync(join(profileH, 'cordis.yml'), '[]\n', 'utf8');
 const envH = { ...env, DSH_HOME: homeH };
-const instH = await run('pnpm', ['install', '--offline'], { cwd: profileH, timeoutMs: 90000 });
-ok(instH.code === 0, '[H] pnpm install exit=' + instH.code);
+linkProfile(profileH, { '@dsh-error-tell/fixture-bad-hang': 'packages/test-fixtures/bad-hang' });
+ok(true, '[H] 沙箱依赖已链接（junction）');
 const gH = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1', '--timeout-ms', '20000'], { env: envH, timeoutMs: 60000 });
 const jH = JSON.parse((gH.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 ok(gH.code === 5 && jH.ok === false && jH.spawn?.timedOut === true, '[H] 挂起超时熔断（exit 5, timedOut）');

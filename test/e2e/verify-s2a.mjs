@@ -3,6 +3,7 @@ import { execSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { linkProfile } from './link-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -28,7 +29,7 @@ writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
 }, null, 2) + '\n');
 writeFileSync(join(profileDir, 'cordis.patch.yml'), ['- insert:', '    - id: fixture-bad-apply', "      name: '@dsh-error-tell/fixture-bad-apply'"].join('\n') + '\n');
 writeFileSync(join(profileDir, 'cordis.yml'), '[]\n');
-execSync('pnpm install --offline', { cwd: profileDir, encoding: 'utf8', timeout: 90000, stdio: 'pipe' });
+linkProfile(profileDir, { '@dsh-error-tell/fixture-bad-apply': 'packages/test-fixtures/bad-apply' });
 ok(existsSync(join(profileDir, 'node_modules', '@dsh-error-tell', 'fixture-bad-apply', 'index.mjs')), 'install 后 fixture 链接存在');
 writeFileSync(join(ROOT, '.tmp', 's2-home-path.txt'), HOME, 'utf8');
 const baseEnv = { ...process.env, DSH_HOME: HOME, DSH_TELEMETRY_DISABLED: '1' };

@@ -3,6 +3,7 @@ import { execSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { linkProfile } from './link-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -28,7 +29,7 @@ function mkProfile() {
   }, null, 2) + '\n');
   writeFileSync(join(profileDir, 'cordis.patch.yml'), ['- insert:', '    - id: fixture-bad-apply', "      name: '@dsh-error-tell/fixture-bad-apply'"].join('\n') + '\n');
   writeFileSync(join(profileDir, 'cordis.yml'), '[]\n');
-  execSync('pnpm install --offline', { cwd: profileDir, encoding: 'utf8', timeout: 90000, stdio: 'pipe' });
+  linkProfile(profileDir, { '@dsh-error-tell/fixture-bad-apply': 'packages/test-fixtures/bad-apply' });
 }
 function readLedger() {
   try { return JSON.parse(readFileSync(join(home, 'state', 'dsh-error-tell', 'quarantine.json'), 'utf8')); } catch { return { entries: [] }; }

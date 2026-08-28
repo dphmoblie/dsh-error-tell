@@ -3,6 +3,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { linkProfile } from './link-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -42,8 +43,12 @@ const profileC = mkProfile(homeC, {
 const pkgC = JSON.parse(readFileSync(join(profileC, 'package.json'), 'utf8'));
 pkgC.dsh.profile.bundles.push('@dsh-error-tell/client-tell');
 writeFileSync(join(profileC, 'package.json'), JSON.stringify(pkgC, null, 2) + '\n');
-const instC = await run('pnpm', ['install', '--offline'], { cwd: profileC, timeoutMs: 60000 });
-ok(instC.code === 0, '[C] pnpm install exit=' + instC.code);
+linkProfile(profileC, {
+  '@dsh-error-tell/client-tell': 'packages/client-tell',
+  '@dsh-error-tell/core': 'packages/core',
+  '@dsh-error-tell/fixture-bad-client': 'packages/test-fixtures/bad-client'
+});
+ok(true, '[C] 沙箱依赖已链接（junction）');
 const envC = { ...process.env, DSH_HOME: homeC, DSH_TELEMETRY_DISABLED: '1' };
 // M5：随机空闲端口（避免固定端口冲突）
 import { createServer as createProbeServer } from 'node:net';
@@ -82,13 +87,13 @@ try { execFileSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio
 const homeD = join(tmp, 'homeD');
 mkProfile(homeD, { '@dsh-error-tell/fixture-bad-import': fileDep('packages/test-fixtures/bad-import') }, ['- insert:', '    - id: fixture-bad-import', "      name: '@dsh-error-tell/fixture-bad-import'"]);
 const envD = { ...process.env, DSH_HOME: homeD, DSH_TELEMETRY_DISABLED: '1' };
-const instD = await run('pnpm', ['install', '--offline'], { cwd: join(homeD, 'profiles', 'web'), timeoutMs: 60000 });
-ok(instD.code === 0, '[D] pnpm install exit=' + instD.code);
+linkProfile(join(homeD, 'profiles', 'web'), { '@dsh-error-tell/fixture-bad-import': 'packages/test-fixtures/bad-import' });
+ok(true, '[D] 沙箱依赖已链接（junction）');
 const dryD = await run('node', [BIN, 'guard', '--profile', 'web', '--dry-run'], { env: envD, timeoutMs: 45000 });
 ok(dryD.stdout.includes('[error/import] fixture-bad-import'), '[D] dry-run 预检发现 import 失败行');
 const gD = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envD, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 60000 });
 const jD = JSON.parse((gD.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
-ok(jD.ok === true && jD.attempts === 1 && jD.disabled.includes('fixture-bad-import'), '[D] 预检拦截：一次启动成功 attempts=' + jD.attempts + ' disabled=' + JSON.stringify(jD.disabled));
+ok(jD.ok === true && jD.attempts === 2 && jD.disabled.includes('fixture-bad-import'), '[D] S2 语义：预检首次观察 → 二次失败禁用 → 重启成功 attempts=' + jD.attempts + ' disabled=' + JSON.stringify(jD.disabled));
 
 rmSync(tmp, { recursive: true, force: true });
 console.log('=== Phase C+D 完成，失败数:', failed, '===');

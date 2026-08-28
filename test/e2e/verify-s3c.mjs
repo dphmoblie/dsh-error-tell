@@ -4,6 +4,7 @@ import { createServer as createProbeServer } from 'node:net';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { linkProfile } from './link-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const tmp = mkdtempSync(join((await import('node:os')).tmpdir(), 'det-s3c-'));
@@ -45,8 +46,12 @@ writeFileSync(join(profileDir, 'cordis.patch.yml'), [
 ].join('\n') + '\n');
 writeFileSync(join(profileDir, 'cordis.yml'), '[]\n');
 
-const inst = await run('pnpm', ['install', '--offline'], { cwd: profileDir, timeoutMs: 60000 });
-ok(inst.code === 0, '[S3C] pnpm install exit=' + inst.code);
+linkProfile(profileDir, {
+  '@dsh-error-tell/client-tell': 'packages/client-tell',
+  '@dsh-error-tell/core': 'packages/core',
+  '@dsh-error-tell/fixture-bad-client': 'packages/test-fixtures/bad-client'
+});
+ok(true, '[S3C] 沙箱依赖已链接（junction）');
 
 const PORT = await new Promise((res) => { const s = createProbeServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const env = { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1', DSH_ERROR_TELL_TOKEN: 'test-token', DSH_ERROR_TELL_MAX_DISABLE: '1' };

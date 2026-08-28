@@ -3,6 +3,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { linkProfile } from './link-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -40,8 +41,12 @@ const profileC = mkProfile(homeC, {
 const pkgC = JSON.parse(readFileSync(join(profileC, 'package.json'), 'utf8'));
 pkgC.dsh.profile.bundles.push('@dsh-error-tell/client-tell');
 writeFileSync(join(profileC, 'package.json'), JSON.stringify(pkgC, null, 2) + '\n');
-const instC = await run('pnpm', ['install', '--offline'], { cwd: profileC, timeoutMs: 60000 });
-ok(instC.code === 0, '[C] pnpm install exit=' + instC.code);
+linkProfile(profileC, {
+  '@dsh-error-tell/client-tell': 'packages/client-tell',
+  '@dsh-error-tell/core': 'packages/core',
+  '@dsh-error-tell/fixture-bad-client': 'packages/test-fixtures/bad-client'
+});
+ok(true, '[C] 沙箱依赖已链接（junction，替代 pnpm workspace 解析）');
 const envC = { ...process.env, DSH_HOME: homeC, DSH_TELEMETRY_DISABLED: '1' };
 // M5：随机空闲端口（避免固定端口冲突）
 import { createServer as createProbeServer } from 'node:net';

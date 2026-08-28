@@ -4,6 +4,7 @@ import { execSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { linkProfile } from './link-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -35,7 +36,7 @@ writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
 }, null, 2) + '\n');
 writeFileSync(join(profileDir, 'cordis.patch.yml'), ['- insert:', '    - id: fixture-bad-import', "      name: '@dsh-error-tell/fixture-bad-import'"].join('\n') + '\n');
 writeFileSync(join(profileDir, 'cordis.yml'), '[]\n');
-execSync('pnpm install --offline', { cwd: profileDir, encoding: 'utf8', timeout: 120000, stdio: 'pipe' });
+linkProfile(profileDir, { '@dsh-error-tell/fixture-bad-import': 'packages/test-fixtures/bad-import' });
 ok(existsSync(join(profileDir, 'node_modules', '@dsh-error-tell', 'fixture-bad-import', 'index.mjs')), 'install 后 fixture 链接存在');
 const env = { ...process.env, DSH_HOME: HOME, DSH_TELEMETRY_DISABLED: '1' };
 
@@ -70,6 +71,11 @@ try {
   out3 = execSync('node "' + BIN + '" guard --profile s2test --restart-limit 0 --timeout-ms 120000 --no-import-checks', { cwd: ROOT, encoding: 'utf8', timeout: 180000, env: { ...env, DSH_ERROR_TELL_QUIT_AFTER_MS: '90000' } });
 } catch (e) { out3 = e.stdout || ''; }
 const j3 = parseJ(out3);
-ok(j3 && j3.ok === true && j3.attempts === 1, '[D3] 禁用后启动成功（ok=' + (j3 && j3.ok) + '）');
+ok(j3 && j3.ok === true && j3.attempts >= 2, '[D3] 禁用后启动成功（探针失败→剔除探针干净启动，attempts=' + (j3 && j3.attempts) + '）');
+// 探针失败的行必须保持禁用（防误恢复死循环）
+const patch3 = existsSync(join(HOME, 'cordis.patch.yml')) ? readFileSync(join(HOME, 'cordis.patch.yml'), 'utf8') : '';
+ok(patch3.includes('- id: fixture-bad-import') && patch3.includes('disabled: true'), '[D3] 仍坏的行保持禁用（未被探针误恢复）');
+const ledger3 = JSON.parse(readFileSync(join(HOME, 'state', 'dsh-error-tell', 'quarantine.json'), 'utf8'));
+ok(!!ledger3.entries.find(x => x.rowId === 'fixture-bad-import' && !x.restoredAt), '[D3] 账本中该行仍活动中（未误标恢复）');
 console.log('=== Phase D 完成，失败数:', failed, '===');
 process.exit(failed ? 1 : 0);

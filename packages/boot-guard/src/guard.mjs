@@ -114,9 +114,11 @@ export async function guard(opts = {}) {
     // 批量失败熔断：单次预检失败数达到阈值视为环境/级联问题，全部只记账
     const batchMode = failures.length >= batchThreshold();
     if (batchMode) log('[dsh-error-tell] 批量失败熔断：本次预检失败 ' + failures.length + ' 个（疑似环境/级联问题），全部只记账不禁用');
+    const probeFailed = new Set();
     for (const f of failures) {
       const prior = failureCount(home, f.rowId);
       const n = prior + 1;
+      if (probeIds.has(f.rowId)) probeFailed.add(f.rowId); // 探针行仍失败：保持禁用，禁止本次成功后误恢复
       if (batchMode || isEnvError(f.message)) {
         log('  [第' + n + '次失败] ' + f.rowId + (batchMode ? '（批量熔断：只记账）' : '（环境类错误：不归因）'));
         preFailures.push(f);
@@ -152,7 +154,9 @@ export async function guard(opts = {}) {
     let last = null;
     let attempts = 0;
     let newFailures = [];
-    for (let attempt = 0; attempt <= restartLimit; attempt++) {
+    let cleanAttemptDone = !probePatchFile; // 无探针时首次启动即干净启动
+    // 退出条件全部在循环体内（成功 / 次数用尽 / 无法归因），允许探针失败后追加一次干净启动
+    for (let attempt = 0; ; attempt++) {
       attempts = attempt + 1;
       if (attempt > 0) {
         const why = newFailures.length ? newFailures.join(', ') : '（stderr 归因）';
@@ -169,12 +173,13 @@ export async function guard(opts = {}) {
       if (last.quit || (last.code !== null && NORMAL_EXITS.has(last.code))) {
         if (last.quit) log('[dsh-error-tell] 服务正常运行中（测试 quit 钩子触发）');
         else log('[dsh-error-tell] dsh 正常结束（exit ' + last.code + '）');
-        // 探针成功 → 自动恢复：账本标记 + 从 managed 段移除
+        // 探针成功 → 自动恢复：只恢复「本次未归因失败」的探针行（仍坏的行保持禁用）
         if (probeIds.size) {
+          const restoreIds = new Set([...probeIds].filter(id => !probeFailed.has(id)));
           const restored = [];
-          for (const id of probeIds) if (restoreQuarantine(home, id)) restored.push(id);
-          writeManaged(patchPath, new Set([...managedIds].filter(id => !probeIds.has(id))));
-          log('[dsh-error-tell] 探针成功，已自动恢复: ' + (restored.join(', ') || '(managed 已移除)'));
+          for (const id of restoreIds) if (restoreQuarantine(home, id)) restored.push(id);
+          if (restoreIds.size) writeManaged(patchPath, new Set([...managedIds, ...toDisableNow].filter(id => !restoreIds.has(id))));
+          log('[dsh-error-tell] 探针成功，已自动恢复: ' + (restored.join(', ') || '(无)') + (probeFailed.size ? '；仍失败保持禁用: ' + [...probeFailed].join(', ') : ''));
         }
         break;
       }
@@ -189,6 +194,7 @@ export async function guard(opts = {}) {
       for (const id of newFailures) {
         const row = rows.find(r2 => r2.id === id);
         const pkgName = row?.name;
+        if (probeIds.has(id)) probeFailed.add(id); // 探针行启动时仍失败：保持禁用
         if (batchMode) {
           addQuarantine(home, { rowId: id, package: pkgName, stage: 'runtime', error: 'dsh 启动失败（见 stderr）（批量熔断未禁用）', source: 'boot-guard-restart-batch' });
           log('[dsh-error-tell] ' + id + '（批量熔断：只记账）');
@@ -209,11 +215,19 @@ export async function guard(opts = {}) {
       writeManaged(patchPath, new Set([...managedIds, ...toDisableNow]));
       // 归因命中探针行：从探针覆盖中剔除（否则重启仍会覆盖启用该行）
       if (probePatchFile && newFailures.some(id => probeIds.has(id))) {
-        const remaining = new Set([...probeIds].filter(id => !toDisableNow.has(id)));
+        const remaining = new Set([...probeIds].filter(id => !probeFailed.has(id)));
         try { unlinkSync(probePatchFile); } catch { /* 忽略 */ }
         probePatchFile = writeProbePatch(remaining, probeDir);
       }
-      if (attempt === restartLimit) break;
+      // 重启次数用尽但探针仍失败：剔除探针后追加一次干净启动（保证禁用生效、web 能开）
+      if (attempt >= restartLimit) {
+        if (!cleanAttemptDone) {
+          cleanAttemptDone = true;
+          log('[dsh-error-tell] 探针行仍失败（' + [...probeFailed].join(', ') + '），剔除探针追加一次干净启动，保证禁用生效');
+          continue;
+        }
+        break;
+      }
       if (!newFailures.length) { log('[dsh-error-tell] 无法从 stderr 归因失败行，熔断不循环'); break; }
     }
     if (last && !(last.quit || (last.code !== null && NORMAL_EXITS.has(last.code)))) {
