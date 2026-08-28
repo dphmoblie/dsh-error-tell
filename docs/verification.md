@@ -30,7 +30,14 @@
   - G: 多坏插件（import + apply）一次清理（25s quit 窗口）
   - H: apply 挂起 → 进程级 timeout → 熔断不循环（exit 5，零配置修改）
   - 注：pending（缺注入服务）在宿主侧不阻断启动（Cordis 静默不激活），已用幂等性验收替代
-- 单元测试：14 ✔ / 0 ✖（含 runtime-guard recordFailure/countManaged、注入脚本恢复面板）
+- 单元测试：32 ✔ / 0 ✖（core + boot-guard + runtime-guard + 注入脚本 VM + meta 解析）
+
+## 0.1.6（面板跟随徽标 + 历史记录功能描述）
+
+- 注入脚本：面板不再固定右下角，而是锚定在徽标旁（上方、右缘对齐，视口内自动收边）；**拖动徽标时面板实时跟随**（VM 单测覆盖初始锚定 + 拖动跟随）。
+- 历史记录：`/api/error-tell/status` 为每条记录附带 `name`（npm 包名）与 `desc`（package.json description），面板在每行下方显示**功能描述 + 包名 + 失败原因**；「仅记录」改为可展开折叠区（`<details>`），同样展示原因；鼠标悬停行可看完整描述（title）。
+- 元数据解析（`packages/client-tell/src/meta.mjs`）：以 loader baseUrl（profile 目录）为锚用 `createRequire` 解析（与 loader import 同源），兜底 `process.cwd()` 与 `~/.dsh/profiles/*`；`exports` 限制 `./package.json` 的包回退主入口向上查找（单测覆盖）。
+- e2e Phase C 新增断言：`/status` 返回 `disabled:true` 且 `desc` 含 fixture 描述。
 - 真实 profile 冒烟：153 行组合解析成功，静态检查 0 问题（只读，不写配置）
 
 ## S2（连续失败 + 探针恢复 + 管理面板）

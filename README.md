@@ -19,8 +19,9 @@ DSH 的启动策略是 fail-loud：
 - **自动重启包装**：`dsh web` 失败后从 stderr 归因插件名 → 追加禁用 → 重启（限次 + 熔断，无法归因不循环）；
 - **运行时看门狗**（runtime-guard bundle）：捕获 apply/import 失败，在进程退出**之前同步**写账本 + 禁用，重启后生效；
 - **浏览器一键恢复**（client-tell）：加载页自动注入「禁用并重载」按钮 + `POST /api/error-tell/disable` 端点，刷新即恢复；
+- **管理面板交互**：徽标可拖拽，面板锚定在徽标旁并跟随移动；历史记录显示每个插件的**功能描述**（package.json description）、包名与失败原因，方便使用的人排错；
 - **隔离账本**：每次禁用的行、包名、阶段、错误、来源均可审计；`restore` 一键回滚；
-- **防误杀**：`maxDisable` 熔断（默认 50）、自我禁用保护、CSRF 防护头、重启循环上限。
+- **防误杀**：`maxDisable` 熔断（默认 5）、环境/批量失败过滤、自我禁用保护、CSRF 防护头、重启循环上限。
 
 ## 架构（三层）
 
@@ -88,7 +89,7 @@ dsh-error-tell restore <rowId>
 | `--patch <file>` | - | 附加 patch 覆盖层（可重复） |
 | `--dry-run` | `false` | 只检查并打印计划，不启动不落盘 |
 | `--restart-limit <n>` | `2` | 失败归因后的最大重启次数 |
-| `--max-disable <n>` | `50` | 单次最多自动禁用行数（熔断防误杀） |
+| `--max-disable <n>` | `5` | 单次最多自动禁用行数（熔断防误杀，`DSH_ERROR_TELL_MAX_DISABLE` 可覆盖） |
 | `--timeout-ms <n>` | `120000` | dsh 子进程超时（apply 挂起时熔断） |
 | `--port <n>` | `0` | 传给 dsh 的端口 |
 
@@ -116,7 +117,7 @@ dsh-error-tell restore <rowId>
 
 ## 验证记录
 
-- 单元测试 7 项：YAML `!!js` 容错 / 账本 / managed 段幂等 / 熔断 / stderr 归因 / 注入脚本 VM ×2
+- 单元测试 32 项：core（managed 段幂等/熔断/环境与批量过滤）+ boot-guard（stderr 归因/预检）+ runtime-guard（同步落盘）+ 注入脚本 VM ×7（含面板跟随、功能描述展示）+ meta 解析 ×4
 - e2e Phase A–H：坏插件 → 启动失败 → 自动禁用 → 重启成功；runtime-guard 进程退出前落盘；client-tell 端点 + 组合图排除；import 预检拦截；幂等性（零副作用）；YAML 损坏友好失败；多坏插件；挂起超时熔断
 - 详见 [docs/verification.md](docs/verification.md)
 
@@ -141,7 +142,7 @@ docs/                # plan / architecture / verification
 - [x] M3 client-tell（注入脚本 + 禁用端点）
 - [x] M4 用例矩阵 + 熔断 + CI
 - [x] S2 评审修复：连续失败判定 + 探针自动恢复 + web 管理面板恢复
-- [ ] 发布 npm（先发布 boot-guard）
+- [x] 发布 npm（core/boot-guard/runtime-guard/client-tell 0.1.x）
 - [ ] 真实用户环境试点
 
 ## License

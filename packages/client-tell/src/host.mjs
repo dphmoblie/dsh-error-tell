@@ -1,8 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged, isProtected } from '@dsh-error-tell/core';
 import { INJECT_SCRIPT } from './inject-script.js';
+import { makeMetaResolver } from './meta.mjs';
 
 export const name = 'error-tell-client-host';
 export const inject = ['webServer'];
@@ -32,6 +35,37 @@ export function apply(ctx) {
   // M3：per-page 随机 token，注入脚本携带，端点校验（跨域页面无法读取）
   const token = process.env.DSH_ERROR_TELL_TOKEN || randomBytes(16).toString('hex');
   const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 5);
+
+  // 插件元数据解析（package.json description → 面板历史记录展示「这个插件是干什么的」）
+  // 解析锚点：loader baseUrl（profile 目录）→ 进程 cwd → ~/.dsh/profiles 下各 profile 目录
+  const profileBases = [];
+  try {
+    for (const e of ctx.loader.entries()) {
+      const b = e.parent?.tree?.ctx?.baseUrl;
+      if (!b) continue;
+      profileBases.push(b.startsWith('file:') ? fileURLToPath(b) : String(b));
+    }
+  } catch { /* loader 未就绪 */ }
+  if (process.cwd()) profileBases.push(process.cwd());
+  try { for (const d of readdirSync(join(home, 'profiles'), { withFileTypes: true })) if (d.isDirectory()) profileBases.push(join(home, 'profiles', d.name)); } catch { /* 无 profiles 目录 */ }
+  const metaResolver = makeMetaResolver(profileBases);
+  const idToName = new Map();
+  try {
+    for (const e of ctx.loader.entries()) {
+      if (e.options?.id && e.options?.name && !e.options.group) idToName.set(e.options.id, e.options.name);
+    }
+  } catch { /* loader 未就绪 */ }
+  const describe = (row) => {
+    const rowId = row.rowId;
+    const pkgName = (row.package && row.package !== rowId) ? row.package : (idToName.get(rowId) || null);
+    const meta = pkgName ? metaResolver(pkgName) : null;
+    return {
+      rowId,
+      package: pkgName || row.package || null,
+      name: (meta && meta.name) || pkgName || null,
+      desc: (meta && meta.description) || null
+    };
+  };
 
   // 1) 加载页注入：禁用/恢复按钮脚本（独立于插件树）
   const disposeTap = webServer.tapIndex((html) => {
@@ -110,9 +144,13 @@ export function apply(ctx) {
         for (const e of activeQuarantine(home)) {
           seen.add(e.rowId);
           // 建议3：标注是否真实禁用（managed 段内 = 已禁用；否则仅记录）
-          disabled.push({ rowId: e.rowId, package: e.package, stage: e.stage, source: e.source, failCount: e.failCount ?? 1, at: e.at, disabled: managed.ids.has(e.rowId) });
+          // 附插件功能描述（desc/name/package），方便使用的人排错
+          disabled.push({ ...describe(e), stage: e.stage, source: e.source, error: e.error || null, failCount: e.failCount ?? 1, at: e.at, disabled: managed.ids.has(e.rowId) });
         }
-        for (const id of managed.ids) if (!seen.has(id)) disabled.push({ rowId: id, source: 'managed', disabled: true });
+        for (const id of managed.ids) {
+          if (seen.has(id)) continue;
+          disabled.push({ ...describe({ rowId: id }), source: 'managed', disabled: true });
+        }
         // 环境/批量问题提示（最近活动记录中是否存在）
         const environmentIssue = ledger.entries.slice(-20).some(e2 => !e2.restoredAt && /-batch|-env/.test(e2.source || ''));
         return json(res, 200, { ok: true, disabled, total: ledger.entries.length, environmentIssue });

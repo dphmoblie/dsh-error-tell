@@ -65,6 +65,11 @@ const dis = await fetch('http://127.0.0.1:' + PORT + '/api/error-tell/disable', 
   body: JSON.stringify({ rowId: '@dsh-error-tell/fixture-bad-client' })
 }).then(r => r.json()).catch(e => ({ error: e.message }));
 ok(dis.ok === true, '[C] 禁用端点 ok');
+// 状态端点：返回插件功能描述（package.json description），帮助使用者排错
+const stC = await fetch('http://127.0.0.1:' + PORT + '/api/error-tell/status', { headers: { 'x-dsh-error-tell': '1', 'x-dsh-error-token': 'test-token' } }).then(r2 => r2.json()).catch(e => ({ error: e.message }));
+const recC = (stC.disabled || []).find(x => x.rowId === 'fixture-bad-client');
+ok(recC && recC.disabled === true, '[C] status 标注已禁用');
+ok(recC && recC.desc && recC.desc.includes('e2e 坏插件'), '[C] status 返回插件功能描述（desc）');
 let html2 = '';
 for (let i = 0; i < 10; i++) {
   await new Promise(r2 => setTimeout(r2, 1000));

@@ -1,6 +1,7 @@
 {
   "name": "@dsh-error-tell/fixture-bad-client",
   "version": "0.0.0",
+  "description": "e2e 坏插件：web 客户端注入期抛错（client-tell 禁用/状态测试用）",
   "private": true,
   "type": "module",
   "main": "./index.mjs",
