@@ -45,6 +45,10 @@
 - **探针 bug 修复**（`packages/boot-guard/src/guard.mjs`）：探针每轮临时启用已禁用行，若插件仍坏：① 启动会失败；② 失败后若重启成功，会把**仍坏的行误恢复**（禁用/恢复死循环）。修复：归因失败的探针行记录 `probeFailed`，从探针覆盖剔除；重启次数用尽时**追加一次无探针的干净启动**（保证禁用生效、web 能开）；成功路径只恢复未失败的行。verify-d D3 增加断言：禁用后启动成功且该行保持禁用/账本仍活动中。
 - 真实 profile 冒烟：153 行组合解析成功，静态检查 0 问题（只读，不写配置）
 
+## 发布记录
+
+- 2026-08-28：`@dsh-error-tell/client-tell` 发布 **0.1.7**（pnpm publish 自动把 `workspace:*` 转成 core@0.1.2）。**0.1.6 已废弃**：误用 `npm publish` 导致依赖仍是 `workspace:*`（npm 消费方装不上），且 granular token 无法 unpublish，请勿使用 0.1.6；真实 profile 已升级 0.1.7（含 `minimumReleaseAgeExclude` 补充 0.1.5/0.1.6/0.1.7 等条目）。
+
 ## S2（连续失败 + 探针恢复 + 管理面板）
 
 - 场景 A（`pnpm e2e:s2a`）：坏插件第 1 次失败 → 账本 failCount=1、**不写禁用**（观察中）；第 2 次失败 → failCount=2、写入 managed 禁用。8 断言全绿。

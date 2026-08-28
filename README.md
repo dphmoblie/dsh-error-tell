@@ -62,7 +62,7 @@ pnpm add @dsh-error-tell/runtime-guard @dsh-error-tell/client-tell
 # 把两个包加入 package.json 的 dsh.profile.bundles，重启 dsh web 生效
 ```
 
-> 发布状态：三包已配置发布元数据（`@dsh-error-tell/*`，v0.1.0，MIT）；首次发布请先发 `@dsh-error-tell/boot-guard`，再发 `runtime-guard` 与 `client-tell`（client-tell 依赖 workspace 协议，`pnpm publish` 自动转换为 registry 版本）。
+> 发布状态：已发布 core 0.1.2 / boot-guard 0.1.2 / runtime-guard 0.1.2 / client-tell 0.1.7（MIT）。注意：client-tell 必须用 `pnpm publish`（自动把 `workspace:*` 依赖转换为具体版本）；0.1.6 因误用 `npm publish` 而依赖未转换，已废弃。
 
 ## 使用
 
