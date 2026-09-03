@@ -80,7 +80,7 @@ window.__ModuleLoader__.load({
 
     // ---------- 状态展示 ----------
     function stateChip(row) {
-      if (row.disabled) return { text: row.managed ? '已禁用(本工具)' : '已禁用(用户层)', cls: 'et-chip et-chip-off' };
+      if (row.disabled) return { text: row.managed ? '已禁用(本工具)' : '已禁用(手动配置)', cls: 'et-chip et-chip-off' };
       if (row.state === 'failed') return { text: '挂载失败', cls: 'et-chip et-chip-bad' };
       if (row.state === 'active') return { text: '运行中', cls: 'et-chip et-chip-on' };
       return { text: '未挂载', cls: 'et-chip et-chip-warn' };
@@ -101,7 +101,7 @@ window.__ModuleLoader__.load({
         return btn;
       }
       if (row.disabled && !row.managed) {
-        var h2 = el('span', 'et-muted', '用户层禁用，请编辑 profile 的 cordis.patch.yml');
+        var h2 = el('span', 'et-muted', '补丁手动禁用，请编辑 cordis.patch.yml');
         return h2;
       }
       if (row.protected) {
@@ -119,8 +119,7 @@ window.__ModuleLoader__.load({
     var KIND_ORDER = ['official', 'third', 'user'];
     var KIND_TITLE = {
       official: '官方插件（@deepseek-ai / cordis:）',
-      third: '第三方插件（社区包）',
-      user: '用户层插件（你在补丁里配置/插入的行）'
+      third: '第三方插件（社区包）'
     };
     function renderRow(box, row, stMap, onDone, onFail) {
       if (row.group) {
@@ -147,10 +146,9 @@ window.__ModuleLoader__.load({
     }
     function buildPlugins(list, stMap, onDone, onFail) {
       var box = el('div');
-      var buckets = { official: [], third: [], user: [] };
+      var buckets = { official: [], third: [] };
       list.forEach(function (r) {
-        var k = r.kind === 'user' ? 'user' : (r.kind === 'official' ? 'official' : 'third');
-        if (!buckets[k]) buckets[k] = [];
+        var k = kindOf(r);
         buckets[k].push(r);
       });
       var any = false;
@@ -202,7 +200,6 @@ window.__ModuleLoader__.load({
       { key: 'all', label: '全部插件' },
       { key: 'official', label: '官方插件' },
       { key: 'third', label: '第三方插件' },
-      { key: 'user', label: '用户层插件' },
       { key: 'history', label: '看门狗历史' }
     ];
     function flash(text, isErr) {
@@ -213,7 +210,7 @@ window.__ModuleLoader__.load({
       current._ft = setTimeout(function () { current.flashEl.textContent = ''; }, 8000);
     }
     function kindOf(row) {
-      return row.kind === 'user' ? 'user' : (row.kind === 'official' ? 'official' : 'third');
+      return row.kind === 'official' ? 'official' : 'third';
     }
     function doAction(kind, rowId, btn, onDone, onFail) {
       if (!getToken()) { onFail('页面缺少访问令牌——请刷新页面后重试'); return; }
@@ -319,7 +316,7 @@ window.__ModuleLoader__.load({
       wrap.appendChild(head);
       var fl = el('div', '');
       wrap.appendChild(fl);
-      wrap.appendChild(el('div', 'et-muted', '说明：官方 = @deepseek-ai/cordis: 包行；第三方 = 社区包行；用户层 = 你在 profile/home 的 cordis.patch.yml 补丁中配置或插入的行（managed 自动段不算）。禁用/恢复写入 home patch（managed 段），热重载约 1-2 秒生效；核心服务与看门狗自身受保护。'));
+      wrap.appendChild(el('div', 'et-muted', '说明：官方 = @deepseek-ai/cordis: 包行；第三方 = 其余社区包行（补丁里配置/禁用的行仍按包归属归入对应分类）。禁用/恢复写入 home patch（managed 段），热重载约 1-2 秒生效；核心服务与看门狗自身受保护。'));
       var tabEl = el('div', 'et-tabs');
       wrap.appendChild(tabEl);
       var contentEl = el('div', 'et-content');

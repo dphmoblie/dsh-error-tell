@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged, isProtected, MANAGED_START, MANAGED_END } from '@dsh-error-tell/core';
+import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged, isProtected } from '@dsh-error-tell/core';
 import { INJECT_SCRIPT } from './inject-script.js';
 import { makeMetaResolver } from './meta.mjs';
 
@@ -28,27 +28,8 @@ function json(res, code, obj) {
   res.end(body);
 }
 
-/**
- * 用户层行 id 集合：给定补丁文件中出现过的行 id（profile/home 的 cordis.patch.yml），
- * 自动 managed 段排除（那是本工具写的，不算用户配置）。
- * 文本扫描足够：补丁是行式 YAML（'- id: X' / insert 子行），config 内嵌 '- id:' 属罕见误报。
- */
-export function userLayerIds(paths) {
-  const ids = new Set();
-  for (const f of paths || []) {
-    let text = '';
-    try { text = readFileSync(f, 'utf8'); } catch { continue; }
-    const start = text.indexOf(MANAGED_START);
-    const end = text.indexOf(MANAGED_END);
-    if (start >= 0 && end > start) text = text.slice(0, start) + text.slice(end + MANAGED_END.length);
-    for (const m of text.matchAll(/^\s*-\s*id:\s*['"]?([^\s'"]+)/gm)) ids.add(m[1]);
-  }
-  return ids;
-}
-
-/** 行分类：user（用户补丁层配置/插入）> official（@deepseek-ai/ 或 cordis: 官方包）> third（社区/第三方包）。 */
-export function pluginKind(rowId, name, userIds) {
-  if (userIds && userIds.has(rowId)) return 'user';
+/** 行分类（仅按包归属）：official（@deepseek-ai/ 或 cordis: 官方包）> third（社区/第三方包）。 */
+export function pluginKind(name) {
   const n = String(name || '');
   if (n.startsWith('@deepseek-ai/') || n.startsWith('cordis:')) return 'official';
   return 'third';
@@ -74,11 +55,6 @@ export function apply(ctx) {
   } catch { /* loader 未就绪 */ }
   if (process.cwd()) profileBases.push(process.cwd());
   try { for (const d of readdirSync(join(home, 'profiles'), { withFileTypes: true })) if (d.isDirectory()) profileBases.push(join(home, 'profiles', d.name)); } catch { /* 无 profiles 目录 */ }
-  // 用户层行判定：profile 补丁 + home 补丁中出现过的行 id（managed 自动段除外）
-  const userPatchPaths = [];
-  if (profileBases.length) userPatchPaths.push(join(profileBases[0], 'cordis.patch.yml'));
-  userPatchPaths.push(join(home, 'cordis.patch.yml'));
-  const userIds = userLayerIds(userPatchPaths);
   const metaResolver = makeMetaResolver(profileBases);
   const idToName = new Map();
   try {
@@ -207,7 +183,7 @@ export function apply(ctx) {
           if (!o.id || seen.has(o.id)) continue;
           seen.add(o.id);
           if (o.group) {
-            plugins.push({ rowId: o.id, name: o.name || null, group: true, disabled: !!e.disabled, kind: pluginKind(o.id, o.name, userIds) });
+            plugins.push({ rowId: o.id, name: o.name || null, group: true, disabled: !!e.disabled, kind: pluginKind(o.name) });
             continue;
           }
           let state = 'idle';
@@ -221,7 +197,7 @@ export function apply(ctx) {
             managed: managed.ids.has(o.id),
             protected: isProtected(o.id, o.name),
             guard: o.id === SELF || String(o.id).startsWith('error-tell-'),
-            kind: pluginKind(o.id, o.name, userIds)
+            kind: pluginKind(o.name)
           });
         }
         return json(res, 200, { ok: true, plugins, total: plugins.length });

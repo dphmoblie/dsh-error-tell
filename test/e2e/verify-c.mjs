@@ -91,7 +91,7 @@ ok(recP.disabled === true && recP.managed === true, '[C] /plugins 反映已禁�
 ok(recP.protected === false && recP.guard === false, '[C] /plugins 普通行标记为可操作');
 ok(recP.desc && recP.desc.includes('e2e 坏插件'), '[C] /plugins 行带功能描述');
 // 分类：fixture 行由 profile 补丁插入 → user；error-tell host 行 → third；官方包行存在 → official
-ok(recP.kind === 'user', '[C] 补丁插入行分类为 user（kind=' + recP.kind + '）');
+ok(recP.kind === 'third', '[C] 补丁插入行按包归属归入 third（kind=' + recP.kind + '）');
 const hostRowC = (plC.plugins || []).find(x => x.rowId === 'error-tell-client-host');
 ok(hostRowC && hostRowC.kind === 'third', '[C] error-tell host 行分类为 third');
 ok((plC.plugins || []).some(x => x.kind === 'official'), '[C] 列表含官方插件行（@deepseek-ai/cordis:）');

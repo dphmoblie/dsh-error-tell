@@ -52,11 +52,11 @@
 - 宿主 bundle 行 name 由 `@dsh-error-tell/client-tell/host` 改为包根（exports `.` → host.mjs）：客户端模块扫描要求 client 条目 id == 包名。
 - 测试：客户端模块 VM ×3（loader 注册/导出/apply 注册契约/无 slots 降级）；verify-c 新增断言 `/plugins`（fixture 行 disabled+managed、可操作标记、desc）与 `__DSH_BOOT__` 含 client-tell 客户端模块 → 15/15 全绿。
 
-## 0.1.8+（设置页三类分栏：官方 / 第三方 / 用户层）
+## 0.1.8+（设置页分类与页签小页面）
 
-- `/api/error-tell/plugins` 每行新增 `kind`：`user`（profile/home 的 cordis.patch.yml 中出现过的行 id，managed 自动段排除；解析用行式扫描 `- id:`）> `official`（包名 `@deepseek-ai/` 或 `cordis:`）> `third`（其余社区包）。
-- 设置页插件列表按 kind 分三栏展示并计数（官方插件 / 第三方插件 / 用户层插件），说明文字写明分类口径；组行折叠为「组 xxx」标题。
-- 单测 `test/kind.test.mjs` ×2（分类优先级 + userLayerIds 含 managed 排除/缺文件容忍）；verify-c 新增断言 fixture(补丁插入)=user、error-tell host=third、存在 official 行 → 17/17 全绿。
+- `/api/error-tell/plugins` 每行返回 `kind`：`official`（包名 `@deepseek-ai/` 或 `cordis:`）或 `third`（其余社区包）——**只按包归属分类**；补丁配置/禁用的行不再单列「用户层」（该方案已按用户要求移除），仍按其包归入官方/第三方。
+- 设置页「错误看门狗」分区改为**页签式小页面**：全部插件 / 官方插件 / 第三方插件 / 看门狗历史，点击跳转、各自计数；数据一次拉取、切页即时渲染；组行折叠为「组 xxx」标题。
+- 单测 `test/kind.test.mjs`（pluginKind 包归属判定）；verify-c 断言 fixture(补丁插入, 社区包)=third、error-tell host=third、存在 official 行。
 
 ## 发布记录
 
