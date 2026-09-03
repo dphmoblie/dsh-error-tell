@@ -44,6 +44,15 @@ test('client 模块：__ModuleLoader__ 注册 + 导出 name/inject/apply', () =>
   assert.equal(typeof exportsObj.apply, 'function');
 });
 
+test('client 模块：分类常量不含已移除的 user 桶（回归：KIND_ORDER 残留导致 buckets[k] undefined 崩溃）', () => {
+  const m = BUNDLE.match(/var KIND_ORDER = \[([^\]]*)\]/);
+  assert.ok(m, '找到 KIND_ORDER');
+  assert.ok(!m[1].includes('user'), 'KIND_ORDER 不含 user: ' + m[1]);
+  const t = BUNDLE.match(/var TABS = \[([\s\S]*?)\];/);
+  assert.ok(t, '找到 TABS');
+  assert.ok(!t[1].includes("'user'"), 'TABS 不含 user 页签');
+});
+
 test('client 模块：apply 注册 settings.section（错误看门狗分区）', () => {
   const { handoff } = loadBundle();
   const react = fakeReact();

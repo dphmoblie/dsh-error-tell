@@ -116,7 +116,7 @@ window.__ModuleLoader__.load({
       return btn;
     }
     // 分类分栏：官方 / 第三方 / 用户层（kind 由宿主 /plugins 提供）
-    var KIND_ORDER = ['official', 'third', 'user'];
+    var KIND_ORDER = ['official', 'third'];
     var KIND_TITLE = {
       official: '官方插件（@deepseek-ai / cordis:）',
       third: '第三方插件（社区包）'
@@ -146,9 +146,11 @@ window.__ModuleLoader__.load({
     }
     function buildPlugins(list, stMap, onDone, onFail) {
       var box = el('div');
-      var buckets = { official: [], third: [] };
+      var buckets = {};
+      KIND_ORDER.forEach(function (ko) { buckets[ko] = []; });
       list.forEach(function (r) {
         var k = kindOf(r);
+        if (!buckets[k]) buckets[k] = [];
         buckets[k].push(r);
       });
       var any = false;
@@ -166,7 +168,7 @@ window.__ModuleLoader__.load({
       var card = el('div', 'et-card');
       var h4 = el('h4', null, '看门狗历史');
       card.appendChild(h4);
-      var list = (st && st.disabled) || [];
+      var list = (st && Array.isArray(st.disabled)) ? st.disabled : [];
       var env = !!(st && st.environmentIssue);
       if (env) card.appendChild(el('div', 'et-err', '⚠ 最近失败疑似环境问题（端口占用/多实例等），已自动跳过禁用'));
       if (!list.length) {
@@ -244,7 +246,7 @@ window.__ModuleLoader__.load({
       if (!current || !current.tabEl) return;
       current.tabEl.innerHTML = '';
       var rows = current.plugins || [];
-      var activeHist = (current.status && current.status.disabled || []).length;
+      var activeHist = (current.status && Array.isArray(current.status.disabled) ? current.status.disabled : []).length;
       TABS.forEach(function (t) {
         var n = t.key === 'all' ? rows.length : (t.key === 'history' ? activeHist : rows.filter(function (x) { return kindOf(x) === t.key; }).length);
         var b = el('button', 'et-tab' + (current.tab === t.key ? ' et-tab-active' : ''), t.label + '（' + n + '）');
@@ -292,14 +294,22 @@ window.__ModuleLoader__.load({
         if (!pj.ok || !sj.ok) {
           flash('端点读取失败：' + ((pj.error || sj.error) || '未知') + '（token 缺失或服务未就绪）', true);
         }
-        current.plugins = pj.plugins || [];
+        current.plugins = Array.isArray(pj.plugins) ? pj.plugins : [];
         current.status = sj;
         current.stMap = {};
-        (sj.disabled || []).forEach(function (e) { current.stMap[e.rowId] = e; });
-        render();
+        (Array.isArray(sj.disabled) ? sj.disabled : []).forEach(function (e) { if (e && e.rowId) current.stMap[e.rowId] = e; });
+        try {
+          render();
+        } catch (e2) {
+          var where2 = (e2 && e2.stack || '').split('\n').slice(0, 3).join(' | ');
+          try { window.__DSH_ERROR_TELL_LAST_ERROR__ = String(e2 && e2.stack || e2); } catch { /* 忽略 */ }
+          flash('渲染失败：' + (e2 && e2.message || e2) + ' @ ' + where2, true);
+        }
       }).catch(function (e) {
         current.busy = false;
-        flash('读取失败：' + (e && e.message || e), true);
+        var where = (e && e.stack || '').split('\n').slice(0, 3).join(' | ');
+        try { window.__DSH_ERROR_TELL_LAST_ERROR__ = String(e && e.stack || e); } catch { /* 忽略 */ }
+        flash('读取失败：' + (e && e.message || e) + ' @ ' + where, true);
       });
     }
     function mountUI(root) {
