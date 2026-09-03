@@ -66,6 +66,11 @@
 - run-e2e Phase D 断言适配 S2（attempts=2），guard JSON 解析改用 parseLastJson（防贪婪匹配）。
 - 验证：verify-c 17/17（rc.6 与 0.1.2-rc.1 双版本）；run-e2e A-H 在 0.1.2-rc.1 全绿（隔离安装）。
 
+## 分类升级：按安装位置判定官方/第三方
+
+- `/api/error-tell/plugins` 的 kind 判定从「只看名字前缀」升级为 `makeKindResolver`：官方 = 名字以 `@deepseek-ai/`/`cordis:` 开头，**或行名解析到的包位于 `@deepseek-ai/dsh` 发行目录自带 node_modules 内**；其余（profile 里用户安装的包、`./xxx.mjs` 相对本地插件等）→ third。
+- 单测 3 项覆盖：profile 锚点真实场景（前缀快速通道/第三方/相对文件）、发行目录内可解析的非前缀包按位置判 official、找不到 dsh 时退化前缀规则。
+
 ## 发布记录
 
 - 2026-08-28：`@dsh-error-tell/client-tell` 发布 **0.1.7**（pnpm publish 自动把 `workspace:*` 转成 core@0.1.2）。**0.1.6 已废弃**：误用 `npm publish` 导致依赖仍是 `workspace:*`（npm 消费方装不上），且 granular token 无法 unpublish，请勿使用 0.1.6；真实 profile 已升级 0.1.7（含 `minimumReleaseAgeExclude` 补充 0.1.5/0.1.6/0.1.7 等条目）。

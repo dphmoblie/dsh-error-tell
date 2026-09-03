@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged, isProtected } from '@dsh-error-tell/core';
 import { INJECT_SCRIPT } from './inject-script.js';
 import { makeMetaResolver } from './meta.mjs';
@@ -28,11 +29,38 @@ function json(res, code, obj) {
   res.end(body);
 }
 
-/** 行分类（仅按包归属）：official（@deepseek-ai/ 或 cordis: 官方包）> third（社区/第三方包）。 */
-export function pluginKind(name) {
-  const n = String(name || '');
-  if (n.startsWith('@deepseek-ai/') || n.startsWith('cordis:')) return 'official';
-  return 'third';
+/**
+ * 行分类解析器：官方 = 行名解析到的包位于 dsh 发行目录（@deepseek-ai/dsh 自带 node_modules）内，
+ * 或名字以 @deepseek-ai/ 与 cordis: 开头；其余（profile 里用户装的包、./xxx.mjs 本地文件等）→ third。
+ * 这样即使官方行不用 @deepseek-ai 名字也能正确归位。
+ */
+export function makeKindResolver(bases) {
+  const list = (Array.isArray(bases) ? bases : [bases]).filter(Boolean);
+  let req = null;
+  let officialRoot = null;
+  for (const b of list) {
+    try {
+      const candidate = createRequire(pathToFileURL(join(b, '__dsh_error_tell_kind__.js')));
+      const dshPkg = candidate.resolve('@deepseek-ai/dsh/package.json');
+      req = candidate;
+      officialRoot = join(dirname(dshPkg), 'node_modules');
+      break;
+    } catch { /* 该锚点解析不到 dsh，试下一个 */ }
+  }
+  const cache = new Map();
+  return function kindOf(name) {
+    const n = String(name || '');
+    if (n.startsWith('@deepseek-ai/') || n.startsWith('cordis:')) return 'official';
+    if (!req || !officialRoot) return 'third';
+    if (cache.has(n)) return cache.get(n);
+    let kind = 'third';
+    try {
+      const p = req.resolve(n + '/package.json');
+      if (p.startsWith(officialRoot)) kind = 'official';
+    } catch { /* 不可解析（相对文件/裸名等）→ third */ }
+    cache.set(n, kind);
+    return kind;
+  };
 }
 
 export function apply(ctx) {
@@ -56,6 +84,7 @@ export function apply(ctx) {
   if (process.cwd()) profileBases.push(process.cwd());
   try { for (const d of readdirSync(join(home, 'profiles'), { withFileTypes: true })) if (d.isDirectory()) profileBases.push(join(home, 'profiles', d.name)); } catch { /* 无 profiles 目录 */ }
   const metaResolver = makeMetaResolver(profileBases);
+  const kindOf = makeKindResolver(profileBases);
   const idToName = new Map();
   try {
     for (const e of ctx.loader.entries()) {
@@ -183,7 +212,7 @@ export function apply(ctx) {
           if (!o.id || seen.has(o.id)) continue;
           seen.add(o.id);
           if (o.group) {
-            plugins.push({ rowId: o.id, name: o.name || null, group: true, disabled: !!e.disabled, kind: pluginKind(o.name) });
+            plugins.push({ rowId: o.id, name: o.name || null, group: true, disabled: !!e.disabled, kind: kindOf(o.name) });
             continue;
           }
           let state = 'idle';
@@ -197,7 +226,7 @@ export function apply(ctx) {
             managed: managed.ids.has(o.id),
             protected: isProtected(o.id, o.name),
             guard: o.id === SELF || String(o.id).startsWith('error-tell-'),
-            kind: pluginKind(o.name)
+            kind: kindOf(o.name)
           });
         }
         return json(res, 200, { ok: true, plugins, total: plugins.length });
