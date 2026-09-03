@@ -164,6 +164,7 @@ export async function guard(opts = {}) {
       }
       // 参数顺序：--patch 是 launcher 选项，必须排在 --port（app 内层参数起点）之前
       const args = ["--profile", profile];
+      if (quitAfterMs > 0) args.push('--no-open'); // 测试钩子模式不弹浏览器：浏览器子进程会占住 stdio，导致 quit 判定挂到超时
       // M2：用户 --patch 覆盖层与探针覆盖层都传给 dsh（保持预检与启动同一棵树）
       for (const p of patchFiles) args.push('--patch', p);
       if (probePatchFile) args.push('--patch', probePatchFile);

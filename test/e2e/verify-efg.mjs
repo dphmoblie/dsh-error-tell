@@ -40,7 +40,8 @@ const profileE = join(homeE, 'profiles', 'web');
   writeFileSync(join(profileE, 'package.json'), JSON.stringify({ name: 'dsh-profile-web', private: true, dependencies: {}, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } } }, null, 2) + '\n');
   writeFileSync(join(profileE, 'cordis.yml'), '[]\n'); // 无 profile patch（干净）
 const envE = { ...process.env, DSH_HOME: homeE, DSH_TELEMETRY_DISABLED: '1' };
-ok(true, '[E] 无依赖沙箱（跳过安装）');
+linkProfile(join(homeE, 'profiles', 'web'), {}); // 无 file: 依赖也要链接（DET_DSH_PREFIX 时含官方包 junction）
+ok(true, '[E] 无依赖沙箱（已链接官方包）');
 const gE = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envE, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 60000 });
 const jE = JSON.parse((gE.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 ok(jE.ok === true && jE.attempts === 1 && jE.disabled.length === 0, '[E] 干净 profile 一次启动成功，未禁用任何行（attempts=' + jE.attempts + '）');

@@ -169,7 +169,7 @@ linkProfile(profileC, {
   '@dsh-error-tell/fixture-bad-client': 'packages/test-fixtures/bad-client'
 });
 ok(true, '[C] 沙箱依赖已链接（junction）');
-const serverC = spawn('dsh', ['--profile', 'web', '--port', String(PORT_C)], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' }, windowsHide: true, shell: true });
+const serverC = spawn('dsh', ['--profile', 'web', '--port', String(PORT_C), '--no-open'], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' }, windowsHide: true, shell: true });
 let serverOut = '', serverErr = '', webUrlC = '', sessionCookie = '';
 serverC.stdout?.on('data', d => { serverOut += d; const m = serverOut.match(/dsh web: (https?:\/\/[^\s]+\?token=[A-Za-z0-9_\-]+)/); if (m && !webUrlC) webUrlC = m[1]; });
 serverC.stderr?.on('data', d => serverErr += d);
@@ -233,7 +233,7 @@ linkProfile(profileD, { '@dsh-error-tell/fixture-bad-import': 'packages/test-fix
 ok(true, '[D] 沙箱依赖已链接（junction）');
 const dryD = await run('node', [BIN, 'guard', '--profile', 'web', '--dry-run'], { env: envD, timeoutMs: 60000 });
 ok(dryD.stdout.includes('[error/import] fixture-bad-import'), '[D] dry-run 预检发现 import 失败行');
-const gD = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envD, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 90000 });
+const gD = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envD, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 200000 }); // dsh 0.1.2 启动更慢：预检~30s+首启+quit60s >100s
 const jD = parseLastJson(gD.stdout);
 ok(jD && jD.ok === true && jD.attempts === 2, '[D] S2 语义：预检首次观察 → 二次失败禁用 → 重启成功（attempts=' + (jD && jD.attempts) + '）');
 ok(jD && Array.isArray(jD.disabled) && jD.disabled.includes('fixture-bad-import'), '[D] 禁用列表含 fixture-bad-import');
@@ -250,7 +250,8 @@ writeFileSync(join(profileE, 'package.json'), JSON.stringify({
 // 不写 cordis.patch.yml：注释-only 的 patch 不是合法顶层数组，缺失即视为干净
 writeFileSync(join(profileE, 'cordis.yml'), '[]\n', 'utf8');
 const envE = { ...env, DSH_HOME: homeE };
-ok(true, '[E] 无依赖沙箱（跳过安装）');
+linkProfile(profileE, {}); // 无 file: 依赖也要链接（DET_DSH_PREFIX 时含官方包 junction）
+ok(true, '[E] 无依赖沙箱（已链接官方包）');
 const gE = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envE, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 90000 });
 const jE = parseLastJson(gE.stdout);
 ok(jE.ok === true && jE.attempts === 1 && jE.disabled.length === 0, '[E] 干净 profile：一次启动成功，未禁用任何行');

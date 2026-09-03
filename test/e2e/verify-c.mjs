@@ -51,7 +51,7 @@ const envC = { ...process.env, DSH_HOME: homeC, DSH_TELEMETRY_DISABLED: '1' };
 // M5：随机空闲端口（避免固定端口冲突）
 import { createServer as createProbeServer } from 'node:net';
 const PORT = await new Promise((res) => { const s = createProbeServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
-const server = spawn('dsh', ['--profile', 'web', '--port', String(PORT)], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' }, windowsHide: true, shell: true });
+const server = spawn('dsh', ['--profile', 'web', '--port', String(PORT), '--no-open'], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' }, windowsHide: true, shell: true });
 let ready = false, exitCode = null;
 let bootOut = '', webUrl = '';
 server.on('exit', (c) => { exitCode = c; });
