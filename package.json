@@ -9,7 +9,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test packages/core/test/*.test.mjs packages/boot-guard/test/*.test.mjs packages/runtime-guard/test/*.test.mjs test/inject.test.mjs test/meta.test.mjs test/client-module.test.mjs",
+    "test": "node --test packages/core/test/*.test.mjs packages/boot-guard/test/*.test.mjs packages/runtime-guard/test/*.test.mjs test/inject.test.mjs test/meta.test.mjs test/client-module.test.mjs test/kind.test.mjs",
     "e2e": "node test/e2e/run-e2e.mjs",
     "e2e:cd": "node test/e2e/verify-cd.mjs",
     "e2e:efg": "node test/e2e/verify-efg.mjs",

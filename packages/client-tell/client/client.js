@@ -110,40 +110,53 @@ window.__ModuleLoader__.load({
       btn.onclick = function () { doAction('disable', row.rowId, btn, onDone, onFail); };
       return btn;
     }
+    // 分类分栏：官方 / 第三方 / 用户层（kind 由宿主 /plugins 提供）
+    var KIND_ORDER = ['official', 'third', 'user'];
+    var KIND_TITLE = {
+      official: '官方插件（@deepseek-ai / cordis:）',
+      third: '第三方插件（社区包）',
+      user: '用户层插件（你在补丁里配置/插入的行）'
+    };
+    function renderRow(box, row, stMap, onDone, onFail) {
+      if (row.group) {
+        box.appendChild(el('div', 'et-group', '组 ' + row.rowId + (row.name && row.name !== row.rowId ? ' · ' + row.name : '')));
+        return;
+      }
+      var card = el('div', 'et-row');
+      var main = el('div', 'et-row-main');
+      var chip = stateChip(row);
+      var name = el('span', 'et-name', row.rowId);
+      main.appendChild(name);
+      main.appendChild(el('span', chip.cls, chip.text));
+      var st = stMap[row.rowId];
+      if (st && !st.disabled) main.appendChild(el('span', 'et-chip et-chip-warn', '曾失败 x' + (st.failCount || 1) + ' [' + (st.source || '?') + ']'));
+      main.appendChild(actionBtn(row, onDone, onFail));
+      card.appendChild(main);
+      var descLine = row.desc || row.name;
+      if (descLine && descLine !== row.rowId) card.appendChild(el('div', 'et-desc', descLine));
+      var metaBits = [];
+      if (row.name && row.name !== row.rowId) metaBits.push('包: ' + row.name);
+      if (row.state === 'failed') metaBits.push('状态: 挂载失败（等待处理或禁用）');
+      if (metaBits.length) card.appendChild(el('div', 'et-meta', metaBits.join(' · ')));
+      box.appendChild(card);
+    }
     function buildPlugins(list, stMap, onDone, onFail) {
       var box = el('div');
-      var singles = [];
-      var groups = {};
+      var buckets = { official: [], third: [], user: [] };
       list.forEach(function (r) {
-        if (r.group) { groups[r.rowId] = groups[r.rowId] || []; }
-        else { singles.push(r); }
+        var k = r.kind === 'user' ? 'user' : (r.kind === 'official' ? 'official' : 'third');
+        if (!buckets[k]) buckets[k] = [];
+        buckets[k].push(r);
       });
-      function renderGroup(title, rows) {
+      var any = false;
+      KIND_ORDER.forEach(function (k) {
+        var rows = buckets[k];
         if (!rows.length) return;
-        if (title) box.appendChild(el('div', 'et-group', title));
-        rows.forEach(function (row) {
-          var card = el('div', 'et-row');
-          var main = el('div', 'et-row-main');
-          var chip = stateChip(row);
-          var name = el('span', 'et-name', row.rowId);
-          main.appendChild(name);
-          main.appendChild(el('span', chip.cls, chip.text));
-          var st = stMap[row.rowId];
-          if (st && !st.disabled) main.appendChild(el('span', 'et-chip et-chip-warn', '曾失败 x' + (st.failCount || 1) + ' [' + (st.source || '?') + ']'));
-          main.appendChild(actionBtn(row, onDone, onFail));
-          card.appendChild(main);
-          var descLine = row.desc || row.name;
-          if (descLine && descLine !== row.rowId) card.appendChild(el('div', 'et-desc', descLine));
-          var metaBits = [];
-          if (row.name && row.name !== row.rowId) metaBits.push('包: ' + row.name);
-          if (row.state === 'failed') metaBits.push('状态: 挂载失败（等待处理或禁用）');
-          if (metaBits.length) card.appendChild(el('div', 'et-meta', metaBits.join(' · ')));
-          box.appendChild(card);
-        });
-      }
-      renderGroup(null, singles);
-      Object.keys(groups).forEach(function (k) { if (groups[k].length) renderGroup(k, groups[k]); });
-      if (!list.length) box.appendChild(el('div', 'et-muted', '（没有可显示的插件行）'));
+        any = true;
+        box.appendChild(el('div', 'et-group', KIND_TITLE[k] + '（' + rows.length + '）'));
+        rows.forEach(function (row) { renderRow(box, row, stMap, onDone, onFail); });
+      });
+      if (!any) box.appendChild(el('div', 'et-muted', '（没有可显示的插件行）'));
       return box;
     }
     function buildHistory(st, onDone, onFail) {
@@ -233,7 +246,8 @@ window.__ModuleLoader__.load({
         current.histEl.innerHTML = '';
         current.histEl.appendChild(buildHistory(sj, function () { setTimeout(refresh, 1400); }, function (m) { flash(m, true); }));
         var rows = pj.plugins || [];
-        current.sumEl.textContent = '插件行 ' + rows.length + ' · 已禁用 ' + rows.filter(function (r) { return r.disabled; }).length + ' · 挂载失败 ' + rows.filter(function (r) { return r.state === 'failed' && !r.disabled; }).length + ' · 总历史 ' + (sj.total || 0);
+        var cnt = function (k) { return rows.filter(function (r) { return (r.kind || (r.group ? 'official' : 'third')) === k; }).length; };
+        current.sumEl.textContent = '官方 ' + cnt('official') + ' · 第三方 ' + cnt('third') + ' · 用户层 ' + cnt('user') + ' · 已禁用 ' + rows.filter(function (r) { return r.disabled; }).length + ' · 挂载失败 ' + rows.filter(function (r) { return r.state === 'failed' && !r.disabled; }).length + ' · 历史 ' + (sj.total || 0);
       }).catch(function (e) {
         current.busy = false;
         flash('读取失败：' + (e && e.message || e), true);
@@ -253,7 +267,7 @@ window.__ModuleLoader__.load({
       wrap.appendChild(head);
       var fl = el('div', '');
       wrap.appendChild(fl);
-      wrap.appendChild(el('div', 'et-muted', '说明：禁用/恢复写入 home patch（managed 段），dsh 热重载约 1-2 秒生效，无需刷新页面。核心服务与看门狗自身受保护，不可禁用。'));
+      wrap.appendChild(el('div', 'et-muted', '说明：官方 = @deepseek-ai/cordis: 包行；第三方 = 社区包行；用户层 = 你在 profile/home 的 cordis.patch.yml 补丁中配置或插入的行（managed 自动段不算）。禁用/恢复写入 home patch（managed 段），热重载约 1-2 秒生效；核心服务与看门狗自身受保护。'));
       wrap.appendChild(el('div', 'et-group', '插件列表（读取 + 手动禁用/恢复）'));
       var listEl = el('div');
       wrap.appendChild(listEl);
