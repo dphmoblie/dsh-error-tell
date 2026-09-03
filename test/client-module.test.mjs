@@ -53,7 +53,7 @@ test('client 模块：分类常量不含已移除的 user 桶（回归：KIND_OR
   assert.ok(!t[1].includes("'user'"), 'TABS 不含 user 页签');
 });
 
-test('client 模块：apply 注册 settings.section（错误看门狗分区）', () => {
+test('client 模块：apply 注册 settings.section（错误哨兵分区）', () => {
   const { handoff } = loadBundle();
   const react = fakeReact();
   const exportsObj = handoff.factory(function (spec) {

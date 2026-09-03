@@ -1,4 +1,4 @@
-// dsh-error-tell — dsh web 设置页「错误看门狗」分区（客户端模块，官方 __ModuleLoader__ 协议）。
+// dsh-error-tell — dsh web 设置页「错误哨兵」分区（客户端模块，官方 __ModuleLoader__ 协议）。
 // 数据来自宿主端点 /api/error-tell/*；每页 token 由注入脚本暴露在 window.__DSH_ERROR_TELL__。
 window.__ModuleLoader__.load({
   id: '@dsh-error-tell/client-tell',
@@ -166,7 +166,7 @@ window.__ModuleLoader__.load({
     }
     function buildHistory(st, onDone, onFail) {
       var card = el('div', 'et-card');
-      var h4 = el('h4', null, '看门狗历史');
+      var h4 = el('h4', null, '哨兵历史');
       card.appendChild(h4);
       var list = (st && Array.isArray(st.disabled)) ? st.disabled : [];
       var env = !!(st && st.environmentIssue);
@@ -202,7 +202,7 @@ window.__ModuleLoader__.load({
       { key: 'all', label: '全部插件' },
       { key: 'official', label: '官方插件' },
       { key: 'third', label: '第三方插件' },
-      { key: 'history', label: '看门狗历史' }
+      { key: 'history', label: '哨兵历史' }
     ];
     function flash(text, isErr) {
       if (!current) return;
@@ -317,7 +317,7 @@ window.__ModuleLoader__.load({
       root.innerHTML = '';
       var wrap = el('div', 'et-wrap');
       var head = el('div', 'et-head');
-      head.appendChild(el('span', 'et-title', 'dsh-error-tell 错误看门狗'));
+      head.appendChild(el('span', 'et-title', 'dsh-error-tell 错误哨兵'));
       var sum = el('span', 'et-muted', '');
       head.appendChild(sum);
       var rbtn = el('button', 'et-btn et-btn-mini', '刷新');
@@ -326,7 +326,7 @@ window.__ModuleLoader__.load({
       wrap.appendChild(head);
       var fl = el('div', '');
       wrap.appendChild(fl);
-      wrap.appendChild(el('div', 'et-muted', '说明：官方 = @deepseek-ai/cordis: 包行；第三方 = 其余社区包行（补丁里配置/禁用的行仍按包归属归入对应分类）。禁用/恢复写入 home patch（managed 段），热重载约 1-2 秒生效；核心服务与看门狗自身受保护。'));
+      wrap.appendChild(el('div', 'et-muted', '说明：官方 = @deepseek-ai/cordis: 包行；第三方 = 其余社区包行（补丁里配置/禁用的行仍按包归属归入对应分类）。禁用/恢复写入 home patch（managed 段），热重载约 1-2 秒生效；核心服务与哨兵自身受保护。'));
       var tabEl = el('div', 'et-tabs');
       wrap.appendChild(tabEl);
       var contentEl = el('div', 'et-content');
@@ -359,10 +359,10 @@ window.__ModuleLoader__.load({
             name: 'settings.section',
             id: 'dsh-error-tell',
             order: 41,
-            label: function () { return '错误看门狗'; }
+            label: function () { return '错误哨兵'; }
           }, function () { return react.createElement(SectionBody, {}); });
         });
-        console.info('[dsh-error-tell] 设置分区已注册（设置 → 错误看门狗）');
+        console.info('[dsh-error-tell] 设置分区已注册（设置 → 错误哨兵）');
       } catch (e) {
         console.warn('[dsh-error-tell] 设置分区注册失败: ' + (e && e.message || e));
       }

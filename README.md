@@ -17,10 +17,10 @@ DSH 的启动策略是 fail-loud：
 
 - **启动预检**（boot-guard）：组合配置 → 静态检查（重复 id / 缺 name）→ import 干跑（子进程隔离）→ 发现问题直接禁用，坏插件根本不进启动流程；
 - **自动重启包装**：`dsh web` 失败后从 stderr 归因插件名 → 追加禁用 → 重启（限次 + 熔断，无法归因不循环）；
-- **运行时看门狗**（runtime-guard bundle）：捕获 apply/import 失败，在进程退出**之前同步**写账本 + 禁用，重启后生效；
+- **运行时哨兵**（runtime-guard bundle）：捕获 apply/import 失败，在进程退出**之前同步**写账本 + 禁用，重启后生效；
 - **浏览器一键恢复**（client-tell）：加载页自动注入「禁用并重载」按钮 + `POST /api/error-tell/disable` 端点，刷新即恢复；
 - **管理面板交互**：徽标可拖拽，面板锚定在徽标旁并跟随移动；历史记录显示每个插件的**功能描述**（package.json description）、包名与失败原因，方便使用的人排错；
-- **设置页「错误看门狗」分区**（客户端模块）：dsh 设置左侧新增分区，可**读取全部插件状态**（运行中/已禁用/挂载失败/用户层禁用 + 功能描述 + 看门狗历史），并对任意插件**手动禁用/恢复**（走同一安全阀：保护名单拒禁、maxDisable 熔断、只写 managed 段、热重载 1-2 秒生效）；
+- **设置页「错误哨兵」分区**（客户端模块）：dsh 设置左侧新增分区，可**读取全部插件状态**（运行中/已禁用/挂载失败/用户层禁用 + 功能描述 + 哨兵历史），并对任意插件**手动禁用/恢复**（走同一安全阀：保护名单拒禁、maxDisable 熔断、只写 managed 段、热重载 1-2 秒生效）；
 - **隔离账本**：每次禁用的行、包名、阶段、错误、来源均可审计；`restore` 一键回滚；
 - **防误杀**：`maxDisable` 熔断（默认 5）、环境/批量失败过滤、自我禁用保护、CSRF 防护头、重启循环上限。
 
@@ -108,7 +108,7 @@ dsh-error-tell restore <rowId>
 - 禁用端点要求 `x-dsh-error-tell: 1` 头（防跨站请求）；
 - 拒绝禁用自身与 `error-tell-*` 守护行；
 - `maxDisable` 熔断：待禁用行数超限时拒绝修改任何配置；
-- 看门狗不递归、不禁自己、失败只记日志；
+- 哨兵不递归、不禁自己、失败只记日志；
 - **连续 2 次失败才禁用**（账本 failCount，`--fail-threshold` 可调），瞬态失败不会被永久封杀；
 - **启动探针自动恢复**：已禁用行每次启动临时启用真实加载，成功即自动解除禁用；
 - **web 管理面板**：正常页面自动显示被禁用插件列表，一键恢复（`/api/error-tell/status` + `/restore`）；
@@ -127,7 +127,7 @@ dsh-error-tell restore <rowId>
 ```
 packages/
   boot-guard/        # 预检 CLI + 重启包装（bin: dsh-error-tell）
-  runtime-guard/     # 宿主看门狗 bundle（dsh.bundle.patch）
+  runtime-guard/     # 宿主哨兵 bundle（dsh.bundle.patch）
   client-tell/       # 双面包：tapIndex 注入 + 禁用端点
   test-fixtures/     # 坏插件工厂（apply / import / client / hang）
 test/                # e2e（run-e2e 全量 + verify-cd/efg 分段）+ 注入脚本 VM 测试

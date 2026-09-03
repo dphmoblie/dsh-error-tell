@@ -196,7 +196,7 @@ export function apply(ctx) {
     }
   });
 
-  // 5) 插件列表端点：设置页「错误看门狗」分区数据源（读取全部插件 + 手动禁用/恢复）
+  // 5) 插件列表端点：设置页「错误哨兵」分区数据源（读取全部插件 + 手动禁用/恢复）
   const pluginsRoute = webServer.register({
     kind: 'exact',
     path: '/api/error-tell/plugins',

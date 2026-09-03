@@ -23,7 +23,7 @@
   "dependencies": {
     "@dsh-error-tell/core": "workspace:*"
   },
-  "description": "DSH web 看门狗：加载页注入 + errorTell 端点 + 设置页「错误看门狗」分区（读取插件/手动禁用恢复）",
+  "description": "DSH web 错误哨兵：加载页注入 + errorTell 端点 + 设置页「错误哨兵」分区（读取插件/手动禁用恢复）",
   "author": "dphmoblie",
   "license": "MIT",
   "repository": {

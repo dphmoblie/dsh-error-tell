@@ -102,7 +102,7 @@ for (let i = 0; i < 10; i++) {
   if (!html2.includes('fixture-bad-client')) break;
 }
 ok(!html2.includes('fixture-bad-client'), '[C] 禁用后组合图排除坏行');
-// /plugins 端点：设置页「错误看门狗」数据源（读取全部插件 + 手动禁用状态）
+// /plugins 端点：设置页「错误哨兵」数据源（读取全部插件 + 手动禁用状态）
 const plC = await fetch('http://127.0.0.1:' + PORT + '/api/error-tell/plugins', { headers: { 'x-dsh-error-tell': '1', 'x-dsh-error-token': 'test-token' } }).then(r2 => r2.json()).catch(e => ({ error: e.message }));
 const recP = (plC.plugins || []).find(x => x.rowId === 'fixture-bad-client');
 ok(plC.ok === true && !!recP, '[C] /plugins 列表包含 fixture 行');

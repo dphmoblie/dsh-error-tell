@@ -45,7 +45,7 @@
 - **探针 bug 修复**（`packages/boot-guard/src/guard.mjs`）：探针每轮临时启用已禁用行，若插件仍坏：① 启动会失败；② 失败后若重启成功，会把**仍坏的行误恢复**（禁用/恢复死循环）。修复：归因失败的探针行记录 `probeFailed`，从探针覆盖剔除；重启次数用尽时**追加一次无探针的干净启动**（保证禁用生效、web 能开）；成功路径只恢复未失败的行。verify-d D3 增加断言：禁用后启动成功且该行保持禁用/账本仍活动中。
 - 真实 profile 冒烟：153 行组合解析成功，静态检查 0 问题（只读，不写配置）
 
-## 0.1.8（设置页「错误看门狗」分区）
+## 0.1.8（设置页「错误哨兵」分区）
 
 - 客户端模块（官方 `__ModuleLoader__` 协议 + `dsh.client` 声明）：`packages/client-tell/client/client.js` 在 dsh 设置页注册 `settings.section`（id `dsh-error-tell`，order 41），内容区自绘（React 外壳 + 原生 DOM）。
 - 数据源：新端点 `GET /api/error-tell/plugins`（读取全部 loader 行：group/disabled(含父组)/state(active/failed/idle)/managed/protected/guard/desc），与既有 `/disable` `/restore` `/status` 组合；注入脚本把每页 token 暴露到 `window.__DSH_ERROR_TELL__.token` 供客户端模块调用（CSRF 语义不变：跨源仍读不到）。
@@ -55,7 +55,7 @@
 ## 0.1.8+（设置页分类与页签小页面）
 
 - `/api/error-tell/plugins` 每行返回 `kind`：`official`（包名 `@deepseek-ai/` 或 `cordis:`）或 `third`（其余社区包）——**只按包归属分类**；补丁配置/禁用的行不再单列「用户层」（该方案已按用户要求移除），仍按其包归入官方/第三方。
-- 设置页「错误看门狗」分区改为**页签式小页面**：全部插件 / 官方插件 / 第三方插件 / 看门狗历史，点击跳转、各自计数；数据一次拉取、切页即时渲染；组行折叠为「组 xxx」标题。
+- 设置页「错误哨兵」分区改为**页签式小页面**：全部插件 / 官方插件 / 第三方插件 / 哨兵历史，点击跳转、各自计数；数据一次拉取、切页即时渲染；组行折叠为「组 xxx」标题。
 - 单测 `test/kind.test.mjs`（pluginKind 包归属判定）；verify-c 断言 fixture(补丁插入, 社区包)=third、error-tell host=third、存在 official 行。
 
 ## dsh 0.1.2-rc.1 适配
