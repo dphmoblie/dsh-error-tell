@@ -62,7 +62,12 @@ window.__ModuleLoader__.load({
       ".et-card h4{margin:0 0 6px;font-size:13px}",
       ".et-btn-mini{padding:1px 8px;font-size:12px}",
       ".et-summary{cursor:pointer;opacity:.75;font-size:12px}",
-      ".et-spin{opacity:.6;padding:14px 0}"
+      ".et-spin{opacity:.6;padding:14px 0}",
+      ".et-tabs{display:flex;gap:4px;flex-wrap:wrap;margin:8px 0 10px;border-bottom:1px solid rgba(128,128,128,.28);padding:0 0 6px}",
+      ".et-tab{background:transparent;border:1px solid transparent;border-bottom:2px solid transparent;border-radius:6px 6px 0 0;padding:5px 12px;cursor:pointer;font:inherit;opacity:.72;white-space:nowrap}",
+      ".et-tab:hover{opacity:1}",
+      ".et-tab-active{opacity:1;border:1px solid rgba(128,128,128,.35);border-bottom-color:currentColor;font-weight:600}",
+      ".et-content{min-height:120px}"
     ].join("\n");
     function ensureStyle() {
       if (document.getElementById(STYLE_ID)) return;
@@ -191,14 +196,24 @@ window.__ModuleLoader__.load({
       return card;
     }
 
-    // ---------- 动作与渲染 ----------
-    var current = null; // { root, flashEl, sumEl, listEl, histEl, busy }
+    // ---------- 页签小页面导航与渲染 ----------
+    var current = null; // { root, flashEl, sumEl, tabEl, contentEl, plugins, status, stMap, tab, busy }
+    var TABS = [
+      { key: 'all', label: '全部插件' },
+      { key: 'official', label: '官方插件' },
+      { key: 'third', label: '第三方插件' },
+      { key: 'user', label: '用户层插件' },
+      { key: 'history', label: '看门狗历史' }
+    ];
     function flash(text, isErr) {
       if (!current) return;
       current.flashEl.textContent = text || '';
       current.flashEl.className = isErr ? 'et-err' : 'et-flash';
       clearTimeout(current._ft);
       current._ft = setTimeout(function () { current.flashEl.textContent = ''; }, 8000);
+    }
+    function kindOf(row) {
+      return row.kind === 'user' ? 'user' : (row.kind === 'official' ? 'official' : 'third');
     }
     function doAction(kind, rowId, btn, onDone, onFail) {
       if (!getToken()) { onFail('页面缺少访问令牌——请刷新页面后重试'); return; }
@@ -225,11 +240,52 @@ window.__ModuleLoader__.load({
         onFail('网络错误：' + (e && e.message || e));
       });
     }
+    function doneCb() { setTimeout(refresh, 1400); }
+    function errCb(m) { flash(m, true); }
+    // 顶部页签：点击跳转到对应小页面
+    function renderTabs() {
+      if (!current || !current.tabEl) return;
+      current.tabEl.innerHTML = '';
+      var rows = current.plugins || [];
+      var activeHist = (current.status && current.status.disabled || []).length;
+      TABS.forEach(function (t) {
+        var n = t.key === 'all' ? rows.length : (t.key === 'history' ? activeHist : rows.filter(function (x) { return kindOf(x) === t.key; }).length);
+        var b = el('button', 'et-tab' + (current.tab === t.key ? ' et-tab-active' : ''), t.label + '（' + n + '）');
+        b.onclick = function () { current.tab = t.key; render(); };
+        current.tabEl.appendChild(b);
+      });
+    }
+    function renderKindPage(kind) {
+      var box = el('div');
+      var rows = (current.plugins || []).filter(function (x) { return kindOf(x) === kind; });
+      var groups = rows.filter(function (x) { return x.group; });
+      var items = rows.filter(function (x) { return !x.group; });
+      if (!rows.length) { box.appendChild(el('div', 'et-muted', '（该分类暂无插件）')); return box; }
+      groups.forEach(function (g) { renderRow(box, g, current.stMap || {}, doneCb, errCb); });
+      items.forEach(function (it) { renderRow(box, it, current.stMap || {}, doneCb, errCb); });
+      return box;
+    }
+    function render() {
+      if (!current) return;
+      renderTabs();
+      current.contentEl.innerHTML = '';
+      var rows = current.plugins || [];
+      var stMap = current.stMap || {};
+      if (current.tab === 'history') {
+        current.contentEl.appendChild(buildHistory(current.status || {}, doneCb, errCb));
+      } else if (current.tab === 'all') {
+        current.contentEl.appendChild(buildPlugins(rows, stMap, doneCb, errCb));
+      } else {
+        current.contentEl.appendChild(renderKindPage(current.tab));
+      }
+      var off = rows.filter(function (r) { return r.disabled; }).length;
+      var bad = rows.filter(function (r) { return r.state === 'failed' && !r.disabled; }).length;
+      current.sumEl.textContent = '已禁用 ' + off + ' · 挂载失败 ' + bad + ' · 总历史 ' + (current.status && current.status.total || 0);
+    }
     function refresh() {
       if (!current || current.busy) return;
       current.busy = true;
-      current.listEl.innerHTML = '';
-      current.listEl.appendChild(el('div', 'et-spin', '读取中…'));
+      flash('读取中…', false);
       Promise.all([
         api('/plugins', { headers: hdr(false) }),
         api('/status', { headers: hdr(false) })
@@ -239,15 +295,11 @@ window.__ModuleLoader__.load({
         if (!pj.ok || !sj.ok) {
           flash('端点读取失败：' + ((pj.error || sj.error) || '未知') + '（token 缺失或服务未就绪）', true);
         }
-        current.listEl.innerHTML = '';
-        var stMap = {};
-        (sj.disabled || []).forEach(function (e) { stMap[e.rowId] = e; });
-        current.listEl.appendChild(buildPlugins(pj.plugins || [], stMap, function () { setTimeout(refresh, 1400); }, function (m) { flash(m, true); }));
-        current.histEl.innerHTML = '';
-        current.histEl.appendChild(buildHistory(sj, function () { setTimeout(refresh, 1400); }, function (m) { flash(m, true); }));
-        var rows = pj.plugins || [];
-        var cnt = function (k) { return rows.filter(function (r) { return (r.kind || (r.group ? 'official' : 'third')) === k; }).length; };
-        current.sumEl.textContent = '官方 ' + cnt('official') + ' · 第三方 ' + cnt('third') + ' · 用户层 ' + cnt('user') + ' · 已禁用 ' + rows.filter(function (r) { return r.disabled; }).length + ' · 挂载失败 ' + rows.filter(function (r) { return r.state === 'failed' && !r.disabled; }).length + ' · 历史 ' + (sj.total || 0);
+        current.plugins = pj.plugins || [];
+        current.status = sj;
+        current.stMap = {};
+        (sj.disabled || []).forEach(function (e) { current.stMap[e.rowId] = e; });
+        render();
       }).catch(function (e) {
         current.busy = false;
         flash('读取失败：' + (e && e.message || e), true);
@@ -268,13 +320,12 @@ window.__ModuleLoader__.load({
       var fl = el('div', '');
       wrap.appendChild(fl);
       wrap.appendChild(el('div', 'et-muted', '说明：官方 = @deepseek-ai/cordis: 包行；第三方 = 社区包行；用户层 = 你在 profile/home 的 cordis.patch.yml 补丁中配置或插入的行（managed 自动段不算）。禁用/恢复写入 home patch（managed 段），热重载约 1-2 秒生效；核心服务与看门狗自身受保护。'));
-      wrap.appendChild(el('div', 'et-group', '插件列表（读取 + 手动禁用/恢复）'));
-      var listEl = el('div');
-      wrap.appendChild(listEl);
-      var histEl = el('div');
-      wrap.appendChild(histEl);
+      var tabEl = el('div', 'et-tabs');
+      wrap.appendChild(tabEl);
+      var contentEl = el('div', 'et-content');
+      wrap.appendChild(contentEl);
       root.appendChild(wrap);
-      current = { root: wrap, flashEl: fl, sumEl: sum, listEl: listEl, histEl: histEl, busy: false };
+      current = { root: wrap, flashEl: fl, sumEl: sum, tabEl: tabEl, contentEl: contentEl, plugins: [], status: null, stMap: {}, tab: 'all', busy: false };
       if (!getToken()) flash('警告：页面未注入访问令牌——请刷新页面后重试', true);
       refresh();
     }
