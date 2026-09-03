@@ -1,21 +1,30 @@
 {
   "name": "@dsh-error-tell/client-tell",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "type": "module",
   "main": "./src/host.mjs",
   "exports": {
     ".": "./src/host.mjs",
-    "./host": "./src/host.mjs"
+    "./host": "./src/host.mjs",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "dependencies": {
     "@dsh-error-tell/core": "workspace:*"
   },
-  "description": "DSH web 加载页注入 + errorTell 端点：浏览器一键禁用/恢复问题插件",
+  "description": "DSH web 看门狗：加载页注入 + errorTell 端点 + 设置页「错误看门狗」分区（读取插件/手动禁用恢复）",
   "author": "dphmoblie",
   "license": "MIT",
   "repository": {
@@ -24,6 +33,7 @@
   },
   "files": [
     "src",
+    "client",
     "cordis.patch.yml"
   ],
   "engines": {

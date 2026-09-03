@@ -1,5 +1,6 @@
-# dsh-error-tell client-tell：加载页「禁用并重载」按钮 + errorTell/disable 端点。
+# dsh-error-tell client-tell：加载页「禁用并重载」按钮 + errorTell/disable/status/plugins 端点。
+# name 用包根（exports "." → src/host.mjs）：客户端模块扫描要求 client 条目 id == 包名。
 - insert:
     - id: error-tell-client-host
-      name: '@dsh-error-tell/client-tell/host'
+      name: '@dsh-error-tell/client-tell'
       inject: [webServer]

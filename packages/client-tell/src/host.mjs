@@ -160,8 +160,47 @@ export function apply(ctx) {
     }
   });
 
-  ctx.logger?.info?.('[dsh-error-tell] client-tell host active: disable/restore/status 端点 + 注入脚本');
-  return () => { disposeTap(); disposeRoute(); restoreRoute(); statusRoute(); };
+  // 5) 插件列表端点：设置页「错误看门狗」分区数据源（读取全部插件 + 手动禁用/恢复）
+  const pluginsRoute = webServer.register({
+    kind: 'exact',
+    path: '/api/error-tell/plugins',
+    handler: async (req, res) => {
+      if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method not allowed' });
+      if (!guardHeader(req)) return json(res, 403, { ok: false, error: 'missing guard header' });
+      try {
+        const managed = readManaged(patchPath);
+        const plugins = [];
+        const seen = new Set();
+        for (const e of ctx.loader.entries()) {
+          const o = e?.options ?? {};
+          if (!o.id || seen.has(o.id)) continue;
+          seen.add(o.id);
+          if (o.group) {
+            plugins.push({ rowId: o.id, name: o.name || null, group: true, disabled: !!e.disabled });
+            continue;
+          }
+          let state = 'idle';
+          try { if (e.fiber) state = e.fiber.state === 3 ? 'failed' : (e.fiber.uid ? 'active' : 'idle'); } catch { /* fiber 未就绪 */ }
+          const meta = describe({ rowId: o.id, package: o.name });
+          plugins.push({
+            ...meta,
+            group: false,
+            state,
+            disabled: !!e.disabled,
+            managed: managed.ids.has(o.id),
+            protected: isProtected(o.id, o.name),
+            guard: o.id === SELF || String(o.id).startsWith('error-tell-')
+          });
+        }
+        return json(res, 200, { ok: true, plugins, total: plugins.length });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: String(e && e.message || e) });
+      }
+    }
+  });
+
+  ctx.logger?.info?.('[dsh-error-tell] client-tell host active: disable/restore/status/plugins 端点 + 注入脚本');
+  return () => { disposeTap(); disposeRoute(); restoreRoute(); statusRoute(); pluginsRoute(); };
 }
 
 function resolveRow(ctx, rowId) {

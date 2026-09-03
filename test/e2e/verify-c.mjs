@@ -65,6 +65,7 @@ let html1 = '';
 try { html1 = await (await fetch('http://127.0.0.1:' + PORT + '/')).text(); } catch {}
 ok(html1.includes('// dsh-error-tell 注入脚本'), '[C] 注入脚本存在');
 ok(html1.includes('fixture-bad-client'), '[C] __DSH_BOOT__ 含坏 client 行');
+ok(html1.includes('client-tell/client.js'), '[C] __DSH_BOOT__ 含 client-tell 客户端模块（设置分区 bundle）');
 const dis = await fetch('http://127.0.0.1:' + PORT + '/api/error-tell/disable', {
   method: 'POST', headers: { 'content-type': 'application/json', 'x-dsh-error-tell': '1', 'x-dsh-error-token': 'test-token' },
   body: JSON.stringify({ rowId: '@dsh-error-tell/fixture-bad-client' })
@@ -82,6 +83,13 @@ for (let i = 0; i < 10; i++) {
   if (!html2.includes('fixture-bad-client')) break;
 }
 ok(!html2.includes('fixture-bad-client'), '[C] 禁用后组合图排除坏行');
+// /plugins 端点：设置页「错误看门狗」数据源（读取全部插件 + 手动禁用状态）
+const plC = await fetch('http://127.0.0.1:' + PORT + '/api/error-tell/plugins', { headers: { 'x-dsh-error-tell': '1', 'x-dsh-error-token': 'test-token' } }).then(r2 => r2.json()).catch(e => ({ error: e.message }));
+const recP = (plC.plugins || []).find(x => x.rowId === 'fixture-bad-client');
+ok(plC.ok === true && !!recP, '[C] /plugins 列表包含 fixture 行');
+ok(recP.disabled === true && recP.managed === true, '[C] /plugins 反映已禁用(managed)');
+ok(recP.protected === false && recP.guard === false, '[C] /plugins 普通行标记为可操作');
+ok(recP.desc && recP.desc.includes('e2e 坏插件'), '[C] /plugins 行带功能描述');
 const patchC = readFileSync(join(homeC, 'cordis.patch.yml'), 'utf8');
 ok(patchC.includes('- id: fixture-bad-client') && patchC.includes('disabled: true'), '[C] home patch 已禁用');
 try { execFileSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { server.kill(); }

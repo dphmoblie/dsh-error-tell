@@ -45,6 +45,13 @@
 - **探针 bug 修复**（`packages/boot-guard/src/guard.mjs`）：探针每轮临时启用已禁用行，若插件仍坏：① 启动会失败；② 失败后若重启成功，会把**仍坏的行误恢复**（禁用/恢复死循环）。修复：归因失败的探针行记录 `probeFailed`，从探针覆盖剔除；重启次数用尽时**追加一次无探针的干净启动**（保证禁用生效、web 能开）；成功路径只恢复未失败的行。verify-d D3 增加断言：禁用后启动成功且该行保持禁用/账本仍活动中。
 - 真实 profile 冒烟：153 行组合解析成功，静态检查 0 问题（只读，不写配置）
 
+## 0.1.8（设置页「错误看门狗」分区）
+
+- 客户端模块（官方 `__ModuleLoader__` 协议 + `dsh.client` 声明）：`packages/client-tell/client/client.js` 在 dsh 设置页注册 `settings.section`（id `dsh-error-tell`，order 41），内容区自绘（React 外壳 + 原生 DOM）。
+- 数据源：新端点 `GET /api/error-tell/plugins`（读取全部 loader 行：group/disabled(含父组)/state(active/failed/idle)/managed/protected/guard/desc），与既有 `/disable` `/restore` `/status` 组合；注入脚本把每页 token 暴露到 `window.__DSH_ERROR_TELL__.token` 供客户端模块调用（CSRF 语义不变：跨源仍读不到）。
+- 宿主 bundle 行 name 由 `@dsh-error-tell/client-tell/host` 改为包根（exports `.` → host.mjs）：客户端模块扫描要求 client 条目 id == 包名。
+- 测试：客户端模块 VM ×3（loader 注册/导出/apply 注册契约/无 slots 降级）；verify-c 新增断言 `/plugins`（fixture 行 disabled+managed、可操作标记、desc）与 `__DSH_BOOT__` 含 client-tell 客户端模块 → 15/15 全绿。
+
 ## 发布记录
 
 - 2026-08-28：`@dsh-error-tell/client-tell` 发布 **0.1.7**（pnpm publish 自动把 `workspace:*` 转成 core@0.1.2）。**0.1.6 已废弃**：误用 `npm publish` 导致依赖仍是 `workspace:*`（npm 消费方装不上），且 granular token 无法 unpublish，请勿使用 0.1.6；真实 profile 已升级 0.1.7（含 `minimumReleaseAgeExclude` 补充 0.1.5/0.1.6/0.1.7 等条目）。

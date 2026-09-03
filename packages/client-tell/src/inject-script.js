@@ -15,6 +15,9 @@ export const INJECT_SCRIPT = `
   var lastStatus = null;
   var PANEL_W = 340;
 
+  // 供设置页客户端模块（错误看门狗分区）调用受保护端点时携带 token
+  try { window.__DSH_ERROR_TELL__ = window.__DSH_ERROR_TELL__ || { token: '__DSH_ERROR_TOKEN__' }; } catch (e) {}
+
   function text(el) { return (el && el.textContent || '').trim(); }
 
   function el(tag, style) {

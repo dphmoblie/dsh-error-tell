@@ -20,6 +20,7 @@ DSH 的启动策略是 fail-loud：
 - **运行时看门狗**（runtime-guard bundle）：捕获 apply/import 失败，在进程退出**之前同步**写账本 + 禁用，重启后生效；
 - **浏览器一键恢复**（client-tell）：加载页自动注入「禁用并重载」按钮 + `POST /api/error-tell/disable` 端点，刷新即恢复；
 - **管理面板交互**：徽标可拖拽，面板锚定在徽标旁并跟随移动；历史记录显示每个插件的**功能描述**（package.json description）、包名与失败原因，方便使用的人排错；
+- **设置页「错误看门狗」分区**（客户端模块）：dsh 设置左侧新增分区，可**读取全部插件状态**（运行中/已禁用/挂载失败/用户层禁用 + 功能描述 + 看门狗历史），并对任意插件**手动禁用/恢复**（走同一安全阀：保护名单拒禁、maxDisable 熔断、只写 managed 段、热重载 1-2 秒生效）；
 - **隔离账本**：每次禁用的行、包名、阶段、错误、来源均可审计；`restore` 一键回滚；
 - **防误杀**：`maxDisable` 熔断（默认 5）、环境/批量失败过滤、自我禁用保护、CSRF 防护头、重启循环上限。
 
@@ -117,7 +118,7 @@ dsh-error-tell restore <rowId>
 
 ## 验证记录
 
-- 单元测试 32 项：core（managed 段幂等/熔断/环境与批量过滤）+ boot-guard（stderr 归因/预检）+ runtime-guard（同步落盘）+ 注入脚本 VM ×7（含面板跟随、功能描述展示）+ meta 解析 ×4
+- 单元测试 35 项：core + boot-guard + runtime-guard + 注入脚本 VM ×7 + meta 解析 ×4 + 客户端模块 VM ×3（设置分区注册契约）
 - e2e Phase A–H：坏插件 → 启动失败 → 自动禁用 → 重启成功；runtime-guard 进程退出前落盘；client-tell 端点 + 组合图排除；import 预检拦截；幂等性（零副作用）；YAML 损坏友好失败；多坏插件；挂起超时熔断
 - 详见 [docs/verification.md](docs/verification.md)
 
