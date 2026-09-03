@@ -53,16 +53,35 @@ import { createServer as createProbeServer } from 'node:net';
 const PORT = await new Promise((res) => { const s = createProbeServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const server = spawn('dsh', ['--profile', 'web', '--port', String(PORT)], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' }, windowsHide: true, shell: true });
 let ready = false, exitCode = null;
+let bootOut = '', webUrl = '';
 server.on('exit', (c) => { exitCode = c; });
 server.stderr?.on('data', () => {});
+// dsh >= 0.1.2-rc.1：web 会话认证，页面需带启动打印的 ?token=（rc.6 无 token 则退回裸路径）
+server.stdout?.on('data', (d) => {
+  bootOut += d;
+  const m = bootOut.match(/dsh web: (https?:\/\/[^\s]+\?token=[A-Za-z0-9_\-]+)/);
+  if (m && !webUrl) webUrl = m[1];
+});
+function pageUrl() { return webUrl || ('http://127.0.0.1:' + PORT + '/'); }
+// 新版会话认证：带 token 的首页 303 → Set-Cookie → 干净路径带 cookie 访问
+let sessionCookie = '';
+async function pageFetch() {
+  const first = await fetch(pageUrl(), { redirect: 'manual', headers: sessionCookie ? { cookie: sessionCookie } : {} });
+  if (first.status === 303) {
+    const sc = first.headers.get('set-cookie');
+    if (sc) sessionCookie = sc.split(';')[0];
+    return fetch('http://127.0.0.1:' + PORT + '/', { headers: sessionCookie ? { cookie: sessionCookie } : {} });
+  }
+  return first;
+}
 for (let i = 0; i < 90; i++) {
-  try { const r = await fetch('http://127.0.0.1:' + PORT + '/'); if (r.status === 200) { ready = true; break; } } catch {}
+  try { const r = await pageFetch(); if (r.status === 200) { ready = true; break; } } catch {}
   if (exitCode !== null) break;
   await new Promise(r2 => setTimeout(r2, 1000));
 }
-ok(ready && exitCode === null, '[C] web 服务就绪且宿主存活');
+ok(ready && exitCode === null, '[C] web 服务就绪且宿主存活' + (webUrl ? '（已换会话 cookie）' : ''));
 let html1 = '';
-try { html1 = await (await fetch('http://127.0.0.1:' + PORT + '/')).text(); } catch {}
+try { html1 = await (await pageFetch()).text(); } catch {}
 ok(html1.includes('// dsh-error-tell 注入脚本'), '[C] 注入脚本存在');
 ok(html1.includes('fixture-bad-client'), '[C] __DSH_BOOT__ 含坏 client 行');
 ok(html1.includes('client-tell/client.js'), '[C] __DSH_BOOT__ 含 client-tell 客户端模块（设置分区 bundle）');
@@ -79,7 +98,7 @@ ok(recC && recC.desc && recC.desc.includes('e2e 坏插件'), '[C] status 返回�
 let html2 = '';
 for (let i = 0; i < 10; i++) {
   await new Promise(r2 => setTimeout(r2, 1000));
-  try { html2 = await (await fetch('http://127.0.0.1:' + PORT + '/')).text(); } catch {}
+  try { html2 = await (await pageFetch()).text(); } catch {}
   if (!html2.includes('fixture-bad-client')) break;
 }
 ok(!html2.includes('fixture-bad-client'), '[C] 禁用后组合图排除坏行');

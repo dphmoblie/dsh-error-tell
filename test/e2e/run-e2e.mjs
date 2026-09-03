@@ -36,6 +36,14 @@ function run(cmd, args, opts = {}) {
 function ok(cond, msg) {
   if (!cond) { console.error('✖ FAIL:', msg); process.exitCode = 1; } else console.log('✔', msg);
 }
+// 取 stdout 中最后一个 guard 结果 JSON（避免贪婪匹配吞掉日志花括号）
+function parseLastJson(out) {
+  const candidates = [...String(out || '').matchAll(/\{[\s\S]*?\n\}/g)].map(m => m[0]);
+  for (const c of [...candidates].reverse()) {
+    try { const o = JSON.parse(c); if (o && 'ok' in o) return o; } catch { /* 跳过 */ }
+  }
+  return null;
+}
 
 // 1) 手工构造 profile（bundles: base + web-app；依赖: bad-apply fixture）
 writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
@@ -162,17 +170,27 @@ linkProfile(profileC, {
 });
 ok(true, '[C] 沙箱依赖已链接（junction）');
 const serverC = spawn('dsh', ['--profile', 'web', '--port', String(PORT_C)], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' }, windowsHide: true, shell: true });
-let serverOut = '', serverErr = '';
-serverC.stdout?.on('data', d => serverOut += d);
+let serverOut = '', serverErr = '', webUrlC = '', sessionCookie = '';
+serverC.stdout?.on('data', d => { serverOut += d; const m = serverOut.match(/dsh web: (https?:\/\/[^\s]+\?token=[A-Za-z0-9_\-]+)/); if (m && !webUrlC) webUrlC = m[1]; });
 serverC.stderr?.on('data', d => serverErr += d);
+const pageUrlC = () => webUrlC || ('http://127.0.0.1:' + PORT_C + '/');
+const pageFetchC = async () => {
+  const first = await fetch(pageUrlC(), { redirect: 'manual', headers: sessionCookie ? { cookie: sessionCookie } : {} });
+  if (first.status === 303) {
+    const sc = first.headers.get('set-cookie');
+    if (sc) sessionCookie = sc.split(';')[0];
+    return fetch('http://127.0.0.1:' + PORT_C + '/', { headers: sessionCookie ? { cookie: sessionCookie } : {} });
+  }
+  return first;
+};
 let readyC = false;
 for (let i = 0; i < 90; i++) {
-  try { const r = await fetch('http://127.0.0.1:' + PORT_C + '/'); if (r.status === 200) { readyC = true; break; } } catch { /* 未就绪 */ }
+  try { const r = await pageFetchC(); if (r.status === 200) { readyC = true; break; } } catch { /* 未就绪 */ }
   await new Promise(r2 => setTimeout(r2, 1000));
 }
 ok(readyC, '[C] web 服务已就绪（宿主正常，坏的是浏览器侧 client bundle）');
 let html1 = '';
-try { html1 = await (await fetch('http://127.0.0.1:' + PORT_C + '/')).text(); } catch { /* 忽略 */ }
+try { html1 = await (await pageFetchC()).text(); } catch { /* 忽略 */ }
 ok(html1.includes('// dsh-error-tell 注入脚本'), '[C] 注入脚本已出现在 index.html');
 ok(html1.includes('fixture-bad-client'), '[C] __DSH_BOOT__ 含坏 client 行（浏览器将白屏失败）');
 const disableRes = await fetch('http://127.0.0.1:' + PORT_C + '/api/error-tell/disable', {
@@ -184,7 +202,7 @@ ok(disableRes.ok === true, '[C] 禁用端点返回 ok（' + JSON.stringify(disab
 let html2 = '';
 for (let i = 0; i < 10; i++) {
   await new Promise(r2 => setTimeout(r2, 1000));
-  try { html2 = await (await fetch('http://127.0.0.1:' + PORT_C + '/')).text(); } catch { /* 重试 */ }
+  try { html2 = await (await pageFetchC()).text(); } catch { /* 重试 */ }
   if (!html2.includes('fixture-bad-client')) break;
 }
 ok(!html2.includes('fixture-bad-client'), '[C] 禁用后新页面 __DSH_BOOT__ 已排除坏 client 行（刷新即恢复正常）');
@@ -216,9 +234,9 @@ ok(true, '[D] 沙箱依赖已链接（junction）');
 const dryD = await run('node', [BIN, 'guard', '--profile', 'web', '--dry-run'], { env: envD, timeoutMs: 60000 });
 ok(dryD.stdout.includes('[error/import] fixture-bad-import'), '[D] dry-run 预检发现 import 失败行');
 const gD = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envD, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 90000 });
-const jD = JSON.parse((gD.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
-ok(jD.ok === true && jD.attempts === 1, '[D] import 失败被预检拦截：无需重启直接正常启动（attempts=' + jD.attempts + '）');
-ok(jD.disabled.includes('fixture-bad-import'), '[D] 禁用列表含 fixture-bad-import');
+const jD = parseLastJson(gD.stdout);
+ok(jD && jD.ok === true && jD.attempts === 2, '[D] S2 语义：预检首次观察 → 二次失败禁用 → 重启成功（attempts=' + (jD && jD.attempts) + '）');
+ok(jD && Array.isArray(jD.disabled) && jD.disabled.includes('fixture-bad-import'), '[D] 禁用列表含 fixture-bad-import');
 
 // ===== Phase E：幂等性 —— 无坏插件时零副作用（验收标准 #3）=====
 const homeE = join(tmp, 'homeE');
@@ -234,7 +252,7 @@ writeFileSync(join(profileE, 'cordis.yml'), '[]\n', 'utf8');
 const envE = { ...env, DSH_HOME: homeE };
 ok(true, '[E] 无依赖沙箱（跳过安装）');
 const gE = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envE, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 90000 });
-const jE = JSON.parse((gE.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
+const jE = parseLastJson(gE.stdout);
 ok(jE.ok === true && jE.attempts === 1 && jE.disabled.length === 0, '[E] 干净 profile：一次启动成功，未禁用任何行');
 ok(!existsSync(join(homeE, 'cordis.patch.yml')), '[E] 未创建 home patch（零副作用）');
 ok(!existsSync(join(homeE, 'state', 'dsh-error-tell')), '[E] 未创建隔离账本（零副作用）');
@@ -276,7 +294,7 @@ linkProfile(profileG, {
 });
 ok(true, '[G] 沙箱依赖已链接（junction）');
 const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '2'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 180000 });
-const jG = JSON.parse((gG.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
+const jG = parseLastJson(gG.stdout);
 // S2 语义：import 坏行预检命中，apply 坏行第 1 次启动才暴露（观察中），第 2 次重启后禁用，第 3 次启动成功
 ok(jG.ok === true && jG.attempts >= 3, '[G] 多坏插件：两轮归因禁用后正常启动（attempts=' + jG.attempts + '）');
 ok(jG.disabled.includes('fixture-bad-import') && jG.disabled.includes('fixture-bad-apply'), '[G] 两个坏行都在禁用列表');
@@ -303,7 +321,7 @@ const envH = { ...env, DSH_HOME: homeH };
 linkProfile(profileH, { '@dsh-error-tell/fixture-bad-hang': 'packages/test-fixtures/bad-hang' });
 ok(true, '[H] 沙箱依赖已链接（junction）');
 const gH = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1', '--timeout-ms', '20000'], { env: envH, timeoutMs: 60000 });
-const jH = JSON.parse((gH.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
+const jH = parseLastJson(gH.stdout);
 ok(gH.code === 5 && jH.ok === false && jH.spawn?.timedOut === true, '[H] 挂起超时熔断（exit 5, timedOut）');
 ok(!existsSync(join(homeH, 'cordis.patch.yml')) && !existsSync(join(homeH, 'state', 'dsh-error-tell')), '[H] 零配置修改');
 // 9) 清理

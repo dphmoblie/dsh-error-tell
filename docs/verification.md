@@ -58,6 +58,14 @@
 - 设置页「错误看门狗」分区改为**页签式小页面**：全部插件 / 官方插件 / 第三方插件 / 看门狗历史，点击跳转、各自计数；数据一次拉取、切页即时渲染；组行折叠为「组 xxx」标题。
 - 单测 `test/kind.test.mjs`（pluginKind 包归属判定）；verify-c 断言 fixture(补丁插入, 社区包)=third、error-tell host=third、存在 official 行。
 
+## dsh 0.1.2-rc.1 适配
+
+- **web 会话认证**：dsh >= 0.1.2-rc.1 首页与 /api 网关置于 browser-trust fence + 会话 cookie 认证；启动打印 `dsh web: http://…/?token=…`，带 token 访问首页 303 → Set-Cookie → 干净路径带 cookie 200。插件经 `webServer.register` 注册的精确路由（/api/error-tell/*）不受网关拦截（e2e 端点断言直接通过）。e2e 统一用「解析 stdout token → 手动 303 换 cookie」流程（rc.6 无 token 时回退裸路径）。
+- **官方包解析**：`link-profile.mjs` 支持 `DET_DSH_PREFIX`（隔离安装如 `.tmp/dsh012`）→ 把该安装自带 node_modules/@deepseek-ai junction 进沙箱，模拟真实升级后的解析；e2e 用 `PATH` 前缀指向隔离 dsh 运行。
+- **客户端模块双版本**：`dsh.client.inject` 由 `dsh-client-runtime`（0.1.2-rc.1 已无此模块）改为两版均存在的 `@deepseek-ai/dsh-client-ui-settings`；`slots` 服务名两版一致（rc.6 由 dsh-client-runtime、新版由 dsh-client-ui-renderer 提供），`settings.section` 注册契约（register({name,id,order,label}, Component)）不变。
+- run-e2e Phase D 断言适配 S2（attempts=2），guard JSON 解析改用 parseLastJson（防贪婪匹配）。
+- 验证：verify-c 17/17（rc.6 与 0.1.2-rc.1 双版本）；run-e2e A-H 在 0.1.2-rc.1 全绿（隔离安装）。
+
 ## 发布记录
 
 - 2026-08-28：`@dsh-error-tell/client-tell` 发布 **0.1.7**（pnpm publish 自动把 `workspace:*` 转成 core@0.1.2）。**0.1.6 已废弃**：误用 `npm publish` 导致依赖仍是 `workspace:*`（npm 消费方装不上），且 granular token 无法 unpublish，请勿使用 0.1.6；真实 profile 已升级 0.1.7（含 `minimumReleaseAgeExclude` 补充 0.1.5/0.1.6/0.1.7 等条目）。

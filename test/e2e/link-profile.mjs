@@ -27,4 +27,21 @@ export function linkProfile(profileDir, links) {
       if (e.code !== 'EEXIST') throw e;
     }
   }
+  linkOfficialDsh(profileDir);
+}
+
+// 适配测试钩子：DET_DSH_PREFIX 指向隔离安装的 dsh（如 .tmp/dsh012）时，
+// 把官方 @deepseek-ai 包（dsh 自带的 node_modules 内）junction 进沙箱，
+// 使沙箱 profile 用与 CLI 同版本的官方 bundle，模拟真实升级后的解析。
+export function linkOfficialDsh(profileDir) {
+  const prefix = process.env.DET_DSH_PREFIX;
+  if (!prefix) return;
+  const target = join(prefix, 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai');
+  const linkPath = join(profileDir, 'node_modules', '@deepseek-ai');
+  mkdirSync(join(linkPath, '..'), { recursive: true });
+  try {
+    symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+  }
 }
