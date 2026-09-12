@@ -49,9 +49,11 @@ DSH 的启动策略是 fail-loud：
 ```bash
 git clone https://github.com/dphmoblie/dsh-error-tell.git
 cd dsh-error-tell && pnpm install
+node scripts/setup-hooks.mjs   # 可选：接入 Gitleaks 提交门禁（需先安装 gitleaks）
 pnpm test          # 单元测试
 pnpm e2e:cd        # 分段 e2e（client-tell + import 预检）
 pnpm e2e:efg       # 分段 e2e（幂等性 / YAML 损坏 / 多坏插件）
+pnpm e2e:h         # 分段 e2e（apply 挂起 → 进程级超时 → 熔断）
 ```
 
 ### 方式二：作为 bundle 装入你的 profile
@@ -63,7 +65,7 @@ pnpm add @dsh-error-tell/runtime-guard @dsh-error-tell/client-tell
 # 把两个包加入 package.json 的 dsh.profile.bundles，重启 dsh web 生效
 ```
 
-> 发布状态：已发布 core 0.1.2 / boot-guard 0.1.2 / runtime-guard 0.1.2 / client-tell 0.1.7（MIT）。注意：client-tell 必须用 `pnpm publish`（自动把 `workspace:*` 依赖转换为具体版本）；0.1.6 因误用 `npm publish` 而依赖未转换，已废弃。
+> 发布状态：已发布 core 0.1.2 / boot-guard 0.1.2 / runtime-guard 0.1.2 / client-tell 0.1.8（MIT）。注意：client-tell 必须用 `pnpm publish`（自动把 `workspace:*` 依赖转换为具体版本）；0.1.6 因误用 `npm publish` 而依赖未转换，已废弃。
 
 ## 使用
 
@@ -118,7 +120,7 @@ dsh-error-tell restore <rowId>
 
 ## 验证记录
 
-- 单元测试 62 项：core + boot-guard + runtime-guard + 注入脚本 VM ×7 + meta 解析 ×4 + 客户端模块 VM ×3（设置分区注册契约）+ runChecks 干跑编排 ×5 + Windows 参数转义 ×6 + 熔断增量语义回归 ×1 + cause 链归因 ×4（`culpritOf`/`stageOf`）+ e2e 辅助 ×7（web URL 解析 / 参数安全 / **超时无孤儿进程**）
+- 单元测试 83 项：core + boot-guard + runtime-guard + 注入脚本 VM ×7 + meta 解析 ×4 + 客户端模块 VM ×3（设置分区注册契约）+ runChecks 干跑编排 ×5 + Windows 参数转义 ×6 + 熔断增量语义回归 ×1 + cause 链归因 ×4（`culpritOf`/`stageOf`）+ e2e 辅助 ×7（web URL 解析 / 参数安全 / **超时无孤儿进程**）+ 并发与账本回归 ×21（跨进程锁 / 损坏账本备份 / 全新 DSH_HOME / 回退条件 / 干跑假阳性 / Origin 校验 / rowId 校验 …）
 - e2e Phase A–H：坏插件 → 启动失败 → 自动禁用 → 重启成功；runtime-guard 进程退出前落盘；client-tell 端点 + 组合图排除；import 预检拦截；幂等性（零副作用）；YAML 损坏友好失败；多坏插件；挂起超时熔断
 - 详见 [docs/verification.md](docs/verification.md)
 

@@ -1,5 +1,5 @@
 // runtime-guard：宿主运行时看门狗。落盘逻辑统一复用 @dsh-error-tell/core（L4）。
-import { countManaged, recordFailure, readManaged, syncDisable, writeManaged, restoreQuarantine, batchThreshold } from '@dsh-error-tell/core';
+import { countManaged, recordFailure, readManaged, syncDisable, writeManaged, restoreQuarantine, batchThreshold, nonNegativeInt, isPendingLikeError, isEnvError } from '@dsh-error-tell/core';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
@@ -78,31 +78,61 @@ function detectDshVersion() {
   return null;
 }
 
+/**
+ * P1-5：批量熔断时只回滚**本进程写入**的禁用行。
+ * 原实现遍历 seen 并删除所有位于 managed 里的 id，会把上一个进程留下的历史禁用项一并恢复。
+ * 独立导出以便单测（不需要真实 dsh）。
+ * @returns {string[]} 实际被回滚的 id
+ */
+export function rollbackWritten(home, patchPath, writtenThisRun) {
+  const ids = [...writtenThisRun];
+  if (!ids.length) return [];
+  const managed = readManaged(patchPath);
+  const rolled = [];
+  for (const id of ids) {
+    if (managed.ids.has(id)) {
+      managed.ids.delete(id);
+      restoreQuarantine(home, id);
+      rolled.push(id);
+    }
+  }
+  if (rolled.length) writeManaged(patchPath, managed.ids);
+  return rolled;
+}
+
 export function apply(ctx) {
   const home = process.env.DSH_HOME || join(homedir(), '.dsh');
   const patchPath = join(home, 'cordis.patch.yml');
-  const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 5);
-  const seen = new Set();
+  // P2-9：Number("abc") → NaN 会让熔断条件恒为 false，统一走非负整数解析
+  const maxDisable = nonNegativeInt(process.env.DSH_ERROR_TELL_MAX_DISABLE, 5);
+  const seen = new Set();          // 已进入处理流程的行（去重 + 批量计数）
+  const writtenThisRun = new Set(); // P1-5：**本进程**真正写进 managed 的行
 
   let batchReverted = false;
   const record = (rowId, pkg, stage, error) => {
-    if (seen.has(rowId) || rowId === SELF) return;
-    seen.add(rowId);
+    if (rowId === SELF) return;
     try {
-      // 批量失败熔断：达到阈值时撤销本进程已写 managed 的禁用（级联故障不误杀）
-      if (seen.size >= batchThreshold() && !batchReverted) {
+      // P2-8：pending / 环境类错误不是「有效失败」，不占用 seen。
+      // 原实现先 seen.add 再交给 recordFailure 分类，导致同一插件的第一次事件若是 pending，
+      // 之后的**真实失败**会被去重永久跳过。
+      if (isPendingLikeError(error) || isEnvError(error)) {
+        recordFailure(home, patchPath, { rowId, pkg, stage, error, source: 'runtime-guard', maxDisable, batchCount: seen.size + 1, log: (m) => ctx.logger?.error?.(m) });
+        return;
+      }
+      if (seen.has(rowId)) return;
+
+      // 批量失败熔断：达到阈值时撤销**本进程已写**的 managed 禁用（级联故障不误杀）
+      const nextCount = seen.size + 1;
+      if (nextCount >= batchThreshold() && !batchReverted) {
         batchReverted = true;
-        const managed = readManaged(patchPath);
-        for (const id of seen) {
-          if (managed.ids.has(id)) {
-            managed.ids.delete(id);
-            restoreQuarantine(home, id);
-          }
-        }
-        writeManaged(patchPath, managed.ids);
+        // P1-5：原实现遍历 seen 并删除所有位于 managed 里的 id，把**历史禁用项**也一并恢复了。
+        // 只回滚 writtenThisRun，绝不碰上一个进程留下的禁用。
+        rollbackWritten(home, patchPath, writtenThisRun);
         ctx.logger?.error?.('[dsh-error-tell] 批量失败熔断：撤销本进程已写的 managed 禁用（疑似环境/级联问题）');
       }
+      seen.add(rowId);
       const disabled = recordFailure(home, patchPath, { rowId, pkg, stage, error, source: 'runtime-guard', maxDisable, batchCount: seen.size, log: (m) => ctx.logger?.error?.(m) });
+      if (disabled) writtenThisRun.add(rowId);
       ctx.logger?.error?.(disabled
         ? '[dsh-error-tell] 已禁用问题插件 ' + rowId + '（' + stage + '），重启后生效'
         : '[dsh-error-tell] 已记录 ' + rowId + '（' + stage + '），但未写入 managed 禁用');

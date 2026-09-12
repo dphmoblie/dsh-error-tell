@@ -10,6 +10,8 @@ import { dshHome, homePatchPath } from './home.mjs';
 import { isProtected, isPendingLikeError, isEnvError, assertPatchParseable, batchThreshold } from '@dsh-error-tell/core';
 
 export const SELF_IDS = new Set(['error-tell-runtime', 'error-tell-client-host']);
+/** P2-14：check 的 skipPackages 比对的是包名，行 id 与包名必须都给。 */
+export const SELF_PACKAGES = new Set(['@dsh-error-tell/runtime-guard', '@dsh-error-tell/client-tell']);
 export const NORMAL_EXITS = new Set([0, 130, 143]);
 
 /**
@@ -27,7 +29,21 @@ export function assertDisableLimit(toDisable, maxDisable, log = () => {}) {
   }
 }
 
-function escapeRegExp(s) { return s.replace(/\$/g, "\\$").replace(/[.*+?^{}()|[\]\\]/g, "\\$&"); }
+/**
+ * P1-2：重启归因阶段是否还能再禁用一行。
+ * precheck 阶段的 assertDisableLimit 只覆盖预检那一批；重启路径每加一行都要重新判，
+ * 否则多个坏插件可以借「启动失败归因」把实际禁用数顶到 maxDisable 之上。
+ */
+export function canAddDisable(toDisable, maxDisable) {
+  return toDisable.size < maxDisable;
+}
+
+// P2-12：先把入参强制转成字符串——YAML 里 id/name 写成数字等非字符串时，
+// 原来会在这里抛 TypeError 导致整个归因流程中断。
+function escapeRegExp(s) { return String(s).replace(/\$/g, "\\$").replace(/[.*+?^{}()|[\]\\]/g, "\\$&"); }
+
+/** 包名右侧允许出现的分隔符（P2-13：补上逗号/分号/句号/方括号等常见标点）。 */
+const NAME_RIGHT_BOUNDARY = '[\\s"\':),;.\\]}!?]';
 
 /**
  * 从 stderr 推断失败行（精确匹配，防误杀）：
@@ -40,16 +56,19 @@ export function inferFailures(stderr, rows) {
   const s = (stderr || '').split(/\r?\n/).filter(l => !isPendingLikeError(l) && !isEnvError(l)).join('\n');
   const hits = new Set();
   for (const row of rows) {
-    if (!row.id || !row.name || SELF_IDS.has(row.id)) continue;
-    const n = escapeRegExp(row.name);
-    if (new RegExp('(?:^|[\\r\\n])' + n + ':').test(s)) { hits.add(row.id); continue; }
-    if (new RegExp('(?:^|[\\s"\'/(])' + n + '(?=[\\s"\':)])').test(s)) { hits.add(row.id); continue; }
+    if (!row || row.id === undefined || row.id === null || row.name === undefined || row.name === null) continue;
+    const id = String(row.id);
+    const name = String(row.name);
+    if (!id || !name || SELF_IDS.has(id)) continue;
+    const n = escapeRegExp(name);
+    if (new RegExp('(?:^|[\\r\\n])' + n + ':').test(s)) { hits.add(id); continue; }
+    if (new RegExp('(?:^|[\\s"\'/(])' + n + '(?=' + NAME_RIGHT_BOUNDARY + ')').test(s)) { hits.add(id); continue; }
     // 显式 id 引用：必须带词边界。原实现用裸 includes('id: ' + id)，
     // 导致 id 互为前缀时互相命中（如 'a' 命中 'id: ab'）→ 误禁用**错误的**插件。
-    const rid = escapeRegExp(row.id);
-    if (new RegExp('id:\\s*' + rid + '(?![\\w.-])').test(s)) { hits.add(row.id); continue; }
-    if (new RegExp('(?:^|[\\s"\'/(])entry\\s+' + rid + '(?![\\w.-])').test(s)) { hits.add(row.id); continue; }
-    if (s.includes('"' + row.id + '"')) hits.add(row.id);
+    const rid = escapeRegExp(id);
+    if (new RegExp('id:\\s*' + rid + '(?![\\w.-])').test(s)) { hits.add(id); continue; }
+    if (new RegExp('(?:^|[\\s"\'/(])entry\\s+' + rid + '(?![\\w.-])').test(s)) { hits.add(id); continue; }
+    if (s.includes('"' + id + '"')) hits.add(id);
   }
   return [...hits];
 }
@@ -61,18 +80,24 @@ export function inferFailures(stderr, rows) {
  * import 失败并写进账本**（M8 的一类：干跑与真实加载管线不一致）。探测失败返回 undefined，
  * 干跑退回只用 profileDir（行为与修复前一致）。
  */
-function detectDshInstall() {
+function detectDshInstall(env) {
   try {
     // 注意：不能写成 spawnSync('npm.cmd', ['root','-g'])——Node 不允许无 shell 执行 .cmd/.bat（会 EINVAL），
     // 而传 args 数组 + shell:true 又会触发 DEP0190。用「已转义的命令串」两者都避开。
-    const npmRoot = spawnSync('npm root -g', { encoding: 'utf8', windowsHide: true, shell: true, timeout: 15000 });
+    // P2-16：必须带上调用方传入的 env（自定义 npm prefix / 隔离安装路径都在 env 里），
+    // 否则 npm 会按进程自身的环境去探测。
+    const npmRoot = spawnSync('npm root -g', {
+      encoding: 'utf8', windowsHide: true, shell: true, timeout: 15000,
+      env: env ? { ...process.env, ...env } : process.env
+    });
     const root = (npmRoot.stdout || '').trim();
     if (npmRoot.status === 0 && root) return join(root, '@deepseek-ai', 'dsh');
   } catch { /* 探测失败不阻塞 */ }
   return undefined;
 }
 
-/** 生成探针覆盖 patch：把已禁用行临时覆盖为 disabled: false（真实加载一次验证是否已修复）。 */export function writeProbePatch(ids, dir) {
+/** 生成探针覆盖 patch：把已禁用行临时覆盖为 disabled: false（真实加载一次验证是否已修复）。 */
+export function writeProbePatch(ids, dir) {
   if (!ids || ids.size === 0) return null;
   mkdirSync(dir, { recursive: true });
   const file = join(dir, 'dsh-error-tell-probe-' + Math.random().toString(16).slice(2) + '.yml');
@@ -89,7 +114,9 @@ function detectDshInstall() {
 export async function guard(opts = {}) {
   const {
     profile = 'web', patchFiles = [], dryRun = false, restartLimit = 2,
-    dshBin = 'dsh', port = 0, extraArgs = [], timeoutMs = 120000, maxDisable = 5,
+    // P1-1：port 默认 undefined = 「不向 dsh 传 --port」（沿用 dsh 自身默认端口）。
+    // 原默认 0 会让 CLI 永远覆盖成临时端口，与 README「用户显式给才传」矛盾。
+    dshBin = 'dsh', port, extraArgs = [], timeoutMs = 120000, maxDisable = 5,
     threshold = 2, importChecks = true, env = process.env, profileDir, dshInstall, quitAfterMs = 0,
     probe = true, log = (msg) => console.log(msg)
   } = opts;
@@ -125,8 +152,9 @@ export async function guard(opts = {}) {
     const issues = await runChecks(rows, {
       importChecks,
       profileDir: profileDir || join(home, "profiles", profile),
-      dshInstall: dshInstall || detectDshInstall(),
-      skipPackages: [...SELF_IDS]
+      dshInstall: dshInstall || detectDshInstall(env),
+      // P2-14：checks 里比对的是 row.name（包名），原来只传 SELF_IDS（行 id）导致自身包没被跳过
+      skipPackages: [...SELF_IDS, ...SELF_PACKAGES]
     });
     const failures = issues.filter(i => i.severity === 'error');
     log("[dsh-error-tell] rows=" + rows.length + " issues=" + issues.length + " errors=" + failures.length);
@@ -233,6 +261,13 @@ export async function guard(opts = {}) {
         addQuarantine(home, { rowId: id, package: pkgName, stage: 'runtime', error: 'dsh 启动失败（见 stderr）', source: 'boot-guard-restart' });
         const n = failureCount(home, id);
         if (decideDisable(1, n - 1, threshold)) {
+          // P1-2：重启归因路径此前直接 add + writeManaged，绕过了 maxDisable 熔断，
+          // 多个坏插件可以借启动失败路径把实际禁用数顶到上限之上。
+          // 这里按「本次运行新增量」实时校验（precheck 阶段的 assertDisableLimit 只覆盖预检那一批）。
+          if (!canAddDisable(toDisableNow, maxDisable)) {
+            log('[dsh-error-tell] 熔断：本次运行禁用数已达上限 ' + maxDisable + '，跳过 ' + id + '（账本已记录，未写入 managed）');
+            continue;
+          }
           toDisableNow.add(id);
           log('[dsh-error-tell] ' + id + ' 第' + n + '次失败 → 禁用');
         } else log('[dsh-error-tell] ' + id + ' 第' + n + '次失败（观察中，未禁用）');

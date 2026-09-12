@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.log
 .tmp/
+# 评审/复现脚本留下的临时目录（mkdtemp 产物），不应被误提交
+tmp-*/

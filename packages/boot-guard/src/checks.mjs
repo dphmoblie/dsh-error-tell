@@ -2,6 +2,28 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { killTree } from './compose.mjs';
+
+function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+/**
+ * 包是否提供 host（非纯浏览器）入口。
+ * P2-15：原实现只认 `main`/`module`/`exports["."]`，会把 `exports: "./index.js"`、
+ * 条件导出直接写在顶层等合法写法误判成「没有 host 入口」→ 进而误判为 client-only 而跳过干跑。
+ */
+export function hasHostEntry(pkg) {
+  if (!pkg || typeof pkg !== 'object') return false;
+  if (pkg.main || pkg.module) return true;
+  const ex = pkg.exports;
+  if (typeof ex === 'string') return true;        // exports: "./index.js"
+  if (Array.isArray(ex)) return ex.length > 0;    // exports: ["./a.js"]
+  if (ex && typeof ex === 'object') {
+    if (Object.prototype.hasOwnProperty.call(ex, '.')) return true;
+    // 条件导出直接写在顶层（没有 "." 键）
+    return ['import', 'require', 'default', 'node', 'browser'].some(k => k in ex);
+  }
+  return false;
+}
 
 function probePackage(name, { profileDir, dshInstall }) {
   for (const base of [profileDir, dshInstall].filter(Boolean)) {
@@ -9,31 +31,59 @@ function probePackage(name, { profileDir, dshInstall }) {
       const req = createRequire(join(base, "package.json"));
       const p = req.resolve(name + "/package.json");
       const pkg = JSON.parse(readFileSync(p, "utf8"));
-      const hasHostEntry = Boolean(pkg.main || pkg.module || pkg.exports?.["."]);
-      return { path: p, pkg, clientOnly: Boolean(pkg.dsh?.client) && !hasHostEntry };
+      return { path: p, pkg, clientOnly: Boolean(pkg.dsh?.client) && !hasHostEntry(pkg) };
     } catch { /* try next base */ }
   }
   return null;
 }
 
-function checkImport(name, cwdList, timeoutMs) {
+/**
+ * 目标包本身是否「解析不到」——而不是它**内部依赖**坏了。
+ * P1-3：只有这种情况才允许回退到 dshInstall。否则 profile 里目标包存在、但其内部依赖缺失时，
+ * 会回退到全局安装的同名健康包并被判为「导入成功」，把真正的损坏掩盖掉。
+ * 判据：错误里报的正是目标包名（`Cannot find package '<name>'`）；若报的是别的包名，
+ * 说明是目标包内部的传递依赖缺失，必须如实上报。
+ */
+export function isTargetUnresolved(msg, name) {
+  const s = String(msg || '');
+  const n = escapeRe(name);
+  return new RegExp("Cannot find package '" + n + "'").test(s)
+    || new RegExp("Cannot find module '" + n + "'").test(s)
+    || new RegExp('ERR_MODULE_NOT_FOUND[^\\n]*' + n).test(s);
+}
+
+/** 唯一哨兵序号：每次干跑一个，避免目标包自己打印 OK 造成假阳性（P2-11）。 */
+let sentinelSeq = 0;
+
+/** 导出的干跑实现（供单测直接驱动，无需经由 runChecks）。 */
+export function checkImport(name, cwdList, timeoutMs) {
   return new Promise((resolve) => {
-    const code = "import(process.argv[1]).then(()=>{console.log('OK');process.exit(0)},e=>{console.log('FAIL');console.error((e&&e.stack)||String(e));process.exit(1)})";
+    const sentinel = '__DET_IMPORT_OK_' + process.pid + '_' + (++sentinelSeq) + '__';
+    const code = "import(process.argv[1]).then(()=>{console.log(process.argv[2]);process.exit(0)},e=>{console.error((e&&e.stack)||String(e));process.exit(1)})";
     const run = (idx) => {
       const cwd = cwdList[idx];
       if (cwd === undefined) return resolve({ ok: false, stage: "import", error: "模块无法解析（已尝试全部查找目录）" });
-      const child = spawn(process.execPath, ['--input-type=module', '-e', code, name], { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-      let out = '', err = '', done = false;
-      const timer = setTimeout(() => { if (!done) { done = true; child.kill(); resolve({ ok: false, stage: "timeout", error: "import 超时(" + timeoutMs + "ms): " + name }); } }, timeoutMs);
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code, name, sentinel], {
+        cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        // P2-10：建进程组，超时时才能按组杀干净（否则插件派生的孙进程会留成孤儿）
+        detached: process.platform !== 'win32'
+      });
+      let out = '', err = '', done = false, timer = null;
+      const finish = (r) => { if (done) return; done = true; if (timer) clearTimeout(timer); resolve(r); };
+      timer = setTimeout(() => { killTree(child); finish({ ok: false, stage: "timeout", error: "import 超时(" + timeoutMs + "ms): " + name }); }, timeoutMs);
       child.stdout.on('data', d => out += d);
       child.stderr.on('data', d => err += d);
-      child.on("error", e => { if (done) return; done = true; clearTimeout(timer); resolve({ ok: false, stage: "spawn", error: e.message }); });
-      child.on('exit', (code) => {
-        if (done) return; done = true; clearTimeout(timer);
-        if (out.includes("OK")) return resolve({ ok: true });
+      child.on("error", e => finish({ ok: false, stage: "spawn", error: e.message }));
+      child.on('exit', (exitCode) => {
+        // P2-11：必须「见到本次的唯一哨兵」**且**「退出码为 0」才算成功。
+        // 原实现只看 stdout 是否包含 "OK"，目标包先打印 OK 再抛错也会被判成功。
+        const sawSentinel = out.includes(sentinel);
         const msg = (err || out || '').split('\n').slice(0, 6).join('\n');
-        if (/Cannot find|ERR_MODULE_NOT_FOUND|Cannot resolve/i.test(msg) && idx + 1 < cwdList.length) return run(idx + 1);
-        resolve({ ok: false, stage: "import", error: msg || ("import 失败: " + name) });
+        if (sawSentinel && exitCode === 0) return finish({ ok: true });
+        // P1-3：只对「目标包本身解析不到」回退到下一个解析锚点
+        if (isTargetUnresolved(msg, name) && idx + 1 < cwdList.length) return run(idx + 1);
+        if (sawSentinel) return finish({ ok: false, stage: "import", error: "import 后进程以非 0 退出（exit " + exitCode + "）：" + name });
+        finish({ ok: false, stage: "import", error: msg || ("import 失败: " + name) });
       });
     };
     run(0);

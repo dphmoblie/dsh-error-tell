@@ -148,6 +148,68 @@
   但 `dsh-error-tell` 是**嵌套独立仓库**、`core.hooksPath` 未设置，因此它的提交**不会**触发该 hook；
   且本机**未安装 gitleaks**，无法在提交前完成扫描——这是需要人工决定的环境问题。
 
+### 第三轮评审（21 项缺陷报告）修复
+
+逐条先验证再改。**其中 3 条经核实与事实有出入**，已在下面标注。
+
+#### P1（7 项，全部属实并已修）
+
+1. **`--port` 被静默忽略** — `bin` 解析了 `port` 却从未传给 `guard()`。已传参，并区分
+   「未传入」（不向 dsh 传 `--port`，沿用 dsh 默认端口）与「显式 `--port 0`」；
+   `guard()` 默认值由 `0` 改为 `undefined`（原来的 0 会让 CLI 永远覆盖成临时端口，与文档矛盾）。
+   数字参数校验同时改为**整数 + 范围**（`--port` 限 0..65535）。
+2. **重启归因绕过 `maxDisable`** — precheck 只校验一次，重启路径 `add` 后直接 `writeManaged`。
+   新增 `canAddDisable()` 并在每轮归因时实时校验，超限只记账不落盘。
+3. **import fallback 掩盖 profile 内部依赖损坏** — 原来只要错误含 `Cannot find` 就回退到
+   `dshInstall`。新增 `isTargetUnresolved()`：**只有报的正是目标包名**才回退；
+   若报的是别的包名，说明是目标包内部的传递依赖缺失，必须如实上报。
+   补端到端回归：profile 内目标包存在、内部依赖缺失 + 全局有同名健康包 → 必须判失败。
+4. **账本/patch 跨进程丢失更新** — ⚠️ **报告声称的复现未能在真实调用路径重现**：
+   我用 50 个子进程直接打 `addQuarantine`+`syncDisable` 得到 **50/50 无丢失**（窗口只有微秒级）；
+   把窗口人为放大到 20ms 后才出现丢失（48/50）。**缺陷机制真实存在，但触发概率取决于调度抖动**。
+   仍按缺陷修复：新增 `withFileLock()`（用 `mkdir` 原子性做的跨进程锁，含陈旧锁强拆与超时）
+   覆盖「读→改→写」整段；临时文件改**随机后缀**（原来固定 `.tmp`，并发写者会互相 rename 对方的临时文件）；
+   补跨进程回归（持锁放大窗口 → 6/6 不丢；另测锁不可重入）。
+5. **runtime-guard 批量熔断误删历史禁用项** — 原实现遍历 `seen` 删除所有位于 managed 的 id。
+   改为 `writtenThisRun` 只记**本进程真正写入**的行，抽出 `rollbackWritten()` 并补回归。
+6. **全新 DSH_HOME 写入失败** — `writeManaged()` 补 `mkdirSync(dirname(patchPath), {recursive:true})`，补回归。
+   说明：`recordFailure` 路径上账本先写会顺带建目录，所以 ENOENT 实际出现在
+   「先写 managed 再记账」的调用方（如 client-tell 的 disable 端点），属真实缺陷。
+7. **损坏账本被静默当空账本** — 改为只有 `ENOENT` 返回空账本；JSON/结构损坏时**先备份**
+   （`quarantine.json.corrupt-<时间戳>`）再重置，并 `emitWarning`。
+   **未采纳"拒绝写入"**：账本是状态文件而非用户配置，一个损坏的状态文件不该让守卫彻底失效；
+   备份已保证原数据不丢，调用方可用 `lastCorruptLedgerBackup()` 查备份路径。
+
+#### P2（14 项：12 项已修 + 2 项需人工决定）
+
+- **⑧ `seen` 过早去重** → pending/环境类错误不占用去重位。补回归：先来的 pending 不得让后续真实失败被跳过
+  （该用例在原实现下会失败）。
+- **⑨ NaN/小数熔断配置** → core 新增 `nonNegativeInt()`，CLI 用整数+范围校验；
+  core / runtime-guard / client-tell 三处 `Number(env)` 全部替换。
+  注意 `Number('') === 0` 不是 NaN，空串必须显式判掉（单测抓到过）。
+- **⑩ checks 超时未杀进程树** → `child.kill()` 改 `killTree()`，并补 POSIX `detached`。
+- **⑪ `stdout.includes('OK')` 假阳性** → 改为**每次唯一的哨兵 + 退出码必须为 0**。
+  补回归：目标包先打印 `OK` 再抛错必须判失败。
+- **⑫ 非字符串 id/name 抛 TypeError** → `escapeRegExp` 先 `String()`，循环里显式跳过 null/undefined。补回归。
+- **⑬ 包名边界缺常见标点** → 右侧边界补 `, ; . ] } ! ?`。补回归（8 种标点）。
+- **⑭ `skipPackages` 字段不一致** → checks 比对的是 `row.name`，原来只传了行 id；新增 `SELF_PACKAGES` 一并传。
+- **⑮ `probePackage` exports 形态** → 抽出 `hasHostEntry()`，兼容 exports 字符串/数组/`"."` 条件导出/顶层条件导出。
+- **⑯ `detectDshInstall` 忽略传入 env** → 透传 `guard({env})`（自定义 npm prefix / 隔离安装才探测得到）。
+- **⑰ rowId 无校验** → core 新增 `isValidRowId()/assertValidRowId()`（字符白名单 + 200 上限），
+  用于 `syncDisable`、`recordFailure`；端点侧非法直接 400（同时避免回显任意输入）。补回归。
+- **⑱ 端点缺 Origin 校验** → 新增 `isAllowedOrigin()`（回环 host 白名单）。
+  **只在 Origin/Referer 存在时校验**：缺失时放行，否则 curl/e2e 会被全部拒掉，token 仍是主防线。
+- **⑲ CI 只支持手动触发** → 补 `push`(main) 与 `pull_request`；`full` 全链路 job 仍限手动。
+- **㉑ README 版本号不一致** → `client-tell 0.1.7` → `0.1.8`。
+- **⑳ Gitleaks 门禁** → ⚠️ **报告部分不准**：hook **确实存在**，但在**工作区根仓库**
+  （`core.hooksPath=.githooks`）；真实缺口是 `dsh-error-tell` 属嵌套独立仓库、`core.hooksPath` 未设置，
+  因此它的提交不触发扫描；且本机未装 gitleaks。
+  已提供仓库自带 `.githooks/pre-commit` + `scripts/setup-hooks.mjs`：
+  **未检测到 gitleaks 时只报告、不改配置**（hook fail-closed，擅自接上会锁死提交）。需人工决定是否接入。
+
+测试：单测 62 → **83 项**全绿（新增 21 项，全部针对上述缺陷）。
+未验证项与第二轮相同：需要真实端口的端到端断言本地无法复跑。
+
 
 ## 待办问题（未修）
 

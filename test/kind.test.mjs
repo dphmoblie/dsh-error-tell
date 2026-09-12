@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { makeKindResolver } from '../packages/client-tell/src/host.mjs';
+import { makeKindResolver, isAllowedOrigin } from '../packages/client-tell/src/host.mjs';
 
 // 布局模拟：dsh 发行目录 @deepseek-ai/dsh 自带 node_modules；profile 另外装第三方包
 function fixture() {
@@ -55,4 +55,20 @@ test('makeKindResolver：找不到 dsh 发行目录时退化为前缀规则（�
   const kindOf = makeKindResolver(['.']);
   assert.equal(kindOf('@deepseek-ai/dsh-base'), 'official');
   assert.equal(kindOf('dshmarket'), 'third');
+});
+
+// ---------- P2-18：端点来源校验 ----------
+test('isAllowedOrigin：回环来源放行，外部来源拒绝，缺失头部放行（由 token 兜底）', () => {
+  const req = (headers) => ({ headers });
+  assert.equal(isAllowedOrigin(req({ origin: 'http://127.0.0.1:3080' })), true);
+  assert.equal(isAllowedOrigin(req({ origin: 'http://localhost:3080' })), true);
+  assert.equal(isAllowedOrigin(req({ origin: 'http://[::1]:3080' })), true);
+  assert.equal(isAllowedOrigin(req({ referer: 'http://127.0.0.1:3080/page' })), true);
+
+  assert.equal(isAllowedOrigin(req({ origin: 'https://evil.example' })), false, '外部来源必须拒绝');
+  assert.equal(isAllowedOrigin(req({ origin: 'http://192.168.1.9:3080' })), false, '局域网其他主机也拒绝');
+  assert.equal(isAllowedOrigin(req({ origin: 'not a url' })), false, '无法解析的来源拒绝');
+
+  assert.equal(isAllowedOrigin(req({})), true, '缺失 Origin/Referer 时放行（curl/e2e 场景，token 仍是主防线）');
+  assert.equal(isAllowedOrigin(undefined), true);
 });

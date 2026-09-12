@@ -1,0 +1,11 @@
+#!/bin/sh
+# P2-20：dsh-error-tell 是嵌套的独立仓库，工作区根的 .githooks 不会自动作用于它，
+# 需要在**本仓库**内配置 core.hooksPath 才有门禁。用 scripts/setup-hooks.mjs 一键接入。
+#
+# 注意：这是 fail-closed 的——本机没装 gitleaks 时它会直接拒绝提交。
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --redact
+else
+  echo "错误：未找到 gitleaks，禁止提交。请先安装 gitleaks（见 README「开发」一节）。" >&2
+  exit 1
+fi

@@ -2,7 +2,19 @@
 // 用可注入 runner 替代真实子进程干跑，因此不需要 spawn（沙箱/CI 友好）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runChecks, clearImportCache } from '../src/checks.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runChecks, clearImportCache, hasHostEntry, isTargetUnresolved, checkImport } from '../src/checks.mjs';
+
+/** 造一个可被 createRequire/import 解析的假包。 */
+function mkPkg(rootDir, name, files) {
+  const dir = join(rootDir, 'node_modules', name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version: '1.0.0', type: 'module', ...(files.pkg || { main: 'index.js' }) }), 'utf8');
+  writeFileSync(join(dir, files.entry || 'index.js'), files.code, 'utf8');
+  return dir;
+}
 
 test('runChecks：import 结果按原行顺序回放，同一包只干跑一次', async () => {
   clearImportCache();
@@ -78,4 +90,87 @@ test('runChecks：runner 抛错时降级为 spawn issue，不炸掉整次预检'
   assert.equal(issues.length, 1);
   assert.equal(issues[0].stage, 'spawn');
   assert.match(issues[0].message, /kaboom/);
+});
+
+// ---------- P2-15：exports 形态 ----------
+test('hasHostEntry：兼容各种合法 exports 写法（P2-15 回归）', () => {
+  assert.equal(hasHostEntry({ main: './index.js' }), true);
+  assert.equal(hasHostEntry({ module: './index.mjs' }), true);
+  assert.equal(hasHostEntry({ exports: './index.js' }), true, 'exports 字符串');
+  assert.equal(hasHostEntry({ exports: ['./index.js'] }), true, 'exports 数组');
+  assert.equal(hasHostEntry({ exports: { '.': './index.js' } }), true, 'exports["."] 字符串');
+  assert.equal(hasHostEntry({ exports: { '.': { import: './i.js', require: './c.js' } } }), true, 'exports["."] 条件导出');
+  assert.equal(hasHostEntry({ exports: { import: './i.js', default: './d.js' } }), true, '条件导出写在顶层');
+  assert.equal(hasHostEntry({ exports: { './sub': './sub.js' } }), false, '只有子路径导出 → 无 host 入口');
+  assert.equal(hasHostEntry({}), false);
+  assert.equal(hasHostEntry(null), false);
+});
+
+// ---------- P1-3：回退条件 ----------
+test('isTargetUnresolved：只有「目标包本身找不到」才算，内部依赖缺失不算（P1-3 回归）', () => {
+  const target = "Cannot find package '@x/target' imported from /p/[eval1]";
+  const transitive = "Cannot find package 'lodash' imported from /p/node_modules/@x/target/index.js";
+  assert.equal(isTargetUnresolved(target, '@x/target'), true);
+  assert.equal(isTargetUnresolved(transitive, '@x/target'), false, '内部依赖缺失不得触发回退');
+  assert.equal(isTargetUnresolved("Cannot find module '@x/target'", '@x/target'), true);
+  assert.equal(isTargetUnresolved('some other error', '@x/target'), false);
+});
+
+test('checkImport：profile 内目标包存在但内部依赖缺失时不得回退到 dshInstall（P1-3 端到端回归）', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'det-fallback-'));
+  const profileDir = join(root, 'profile');
+  const dshInstall = join(root, 'global');
+  mkdirSync(profileDir, { recursive: true });
+  mkdirSync(dshInstall, { recursive: true });
+  // profile 里：目标包存在，但内部 import 了一个不存在的依赖
+  mkPkg(profileDir, '@x/broken', { code: "import 'definitely-missing-dep';\nexport default {};\n" });
+  // 全局安装里：同名且健康的包（原实现会回退到这里 → 误判成功）
+  mkPkg(dshInstall, '@x/broken', { code: 'export default {};\n' });
+
+  const res = await checkImport('@x/broken', [profileDir, dshInstall], 20000);
+  assert.equal(res.ok, false, '必须报告失败，而不是被全局同名包掩盖');
+  assert.match(String(res.error), /definitely-missing-dep/, '错误应指向真正缺失的内部依赖');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('checkImport：目标包在 profile 与全局都找不到时，才回退并最终报「无法解析」', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'det-fallback2-'));
+  const profileDir = join(root, 'profile');
+  const dshInstall = join(root, 'global');
+  mkdirSync(profileDir, { recursive: true });
+  mkdirSync(dshInstall, { recursive: true });
+  // 只在全局安装里存在 → 应回退成功命中
+  mkPkg(dshInstall, '@x/only-global', { code: 'export default {};\n' });
+  const hit = await checkImport('@x/only-global', [profileDir, dshInstall], 20000);
+  assert.equal(hit.ok, true, '目标包确实不存在于 profile 时应回退到 dshInstall');
+
+  const miss = await checkImport('@x/nowhere', [profileDir, dshInstall], 20000);
+  assert.equal(miss.ok, false);
+  assert.equal(miss.stage, 'import');
+  rmSync(root, { recursive: true, force: true });
+});
+
+// ---------- P2-11 / P2-10：干跑判定与超时 ----------
+test('checkImport：目标包先打印 OK 再抛错，必须判为失败（P2-11 回归）', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'det-okthrow-'));
+  mkPkg(root, '@x/ok-then-throw', { code: "console.log('OK');\nthrow new Error('boom after OK');\n" });
+  const res = await checkImport('@x/ok-then-throw', [root], 20000);
+  assert.equal(res.ok, false, '原实现只要 stdout 含 OK 就判成功，会被这里骗过');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('checkImport：正常包判成功；挂起包走上限超时且不挂死（P2-10 回归）', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'det-timeout-'));
+  mkPkg(root, '@x/good', { code: 'export default {};\n' });
+  assert.equal((await checkImport('@x/good', [root], 20000)).ok, true);
+
+  // 注意：不能写 `await new Promise(() => {})`——那种顶层 await 不保持事件循环，
+  // Node 会以 exit 13（unsettled top-level await）直接退出，根本不会挂起。
+  // 用一个长定时器保持事件循环，才是真正的「卡住」。
+  mkPkg(root, '@x/hang', { code: 'await new Promise(r => setTimeout(r, 60000));\n' });
+  const started = Date.now();
+  const res = await checkImport('@x/hang', [root], 1500);
+  assert.equal(res.stage, 'timeout', '挂起包必须报 timeout');
+  assert.ok(Date.now() - started < 15000, '不应挂死（实际 ' + (Date.now() - started) + 'ms）');
+  rmSync(root, { recursive: true, force: true });
 });

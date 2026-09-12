@@ -3,10 +3,72 @@
 // 唯一权威实现：boot-guard 的 patch-writer/quarantine 与本包的落盘函数均由此提供。
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 const _require = createRequire(import.meta.url);
 const yaml = _require('js-yaml');
+
+/**
+ * 原子写：写入「带随机后缀」的临时文件再 rename 覆盖目标。
+ *
+ * 为什么不能再用固定的 `<file>.tmp`：并发写者会写到同一个临时文件上互相覆盖，
+ * 后 rename 的那个可能把别人写了一半的内容搬成正式文件，或 rename 到已被搬走的路径而 ENOENT。
+ * 随机后缀让每个写者独占自己的临时文件，rename 本身在同一文件系统上是原子的。
+ */
+function atomicWrite(file, content) {
+  const tmp = file + '.' + process.pid + '.' + randomBytes(4).toString('hex') + '.tmp';
+  writeFileSync(tmp, content, 'utf8');
+  try {
+    renameSync(tmp, file);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* 清理尽力而为 */ }
+    throw e;
+  }
+}
+
+/** 同步睡眠（不引入依赖）：only used for lock spin. */
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+  catch { const end = Date.now() + ms; while (Date.now() < end) { /* spin */ } }
+}
+
+/**
+ * 跨进程互斥：用 mkdir 的原子性做锁（Windows/POSIX 都成立，无需依赖）。
+ * 覆盖「读 → 改 → 写」整段，避免并发写者丢失更新（P1-4）。
+ * 超时后强拆陈旧锁，避免上一个进程崩溃导致永久死锁。
+ */
+export function withFileLock(lockPath, fn, { timeoutMs = 5000, staleMs = 10000 } = {}) {
+  mkdirSync(dirname(lockPath), { recursive: true }); // 锁目录本身可能还不存在（全新 DSH_HOME）
+  const deadline = Date.now() + timeoutMs;
+  let held = false;
+  for (;;) {
+    try { mkdirSync(lockPath); held = true; break; }
+    catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      // 陈旧锁：持有者可能已崩溃
+      try {
+        const st = statSync(lockPath);
+        if (Date.now() - st.mtimeMs > staleMs) rmdirSync(lockPath);
+      } catch { /* 锁刚被释放 */ }
+      if (Date.now() > deadline) throw new Error('获取文件锁超时（' + lockPath + '）');
+      sleepSync(5);
+    }
+  }
+  try { return fn(); }
+  finally { if (held) { try { rmdirSync(lockPath); } catch { /* 已释放 */ } } }
+}
+
+/** 非负整数解析：非法值（NaN / 负数 / 小数 / 空串）返回 fallback，避免熔断条件被 NaN 击穿。 */
+export function nonNegativeInt(value, fallback) {
+  if (value === null || value === undefined) return fallback;
+  // 注意 Number('') === 0（不是 NaN），空串必须显式判掉，否则会被当成合法的 0
+  if (typeof value === 'string' && value.trim() === '') return fallback;
+  const n = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return fallback;
+  return n;
+}
+
 
 export const MANAGED_START = '# --- dsh-error-tell managed (auto-generated; do not edit) ---';
 export const MANAGED_END = '# --- end dsh-error-tell managed ---';
@@ -57,7 +119,13 @@ export function renderBlock(ids) {
  * → 写盘 → 重新解析验证（失败回滚并抛错）。
  */
 export function writeManaged(patchPath, ids) {
+  // P1-4：整个「读 → 改 → 写」必须在跨进程锁内，否则并发写者会丢失更新
+  return withFileLock(patchPath + '.lock', () => writeManagedLocked(patchPath, ids));
+}
+
+function writeManagedLocked(patchPath, ids) {
   ids = ids instanceof Set ? ids : new Set(ids);
+  mkdirSync(dirname(patchPath), { recursive: true }); // P1-6：全新 DSH_HOME 时父目录还不存在
   const { text, present } = readManaged(patchPath);
   if (!present && text === '' && ids.size === 0) return { ids: [] }; // 无事不创建文件
   if (present && ids.size === 0) {
@@ -69,8 +137,7 @@ export function writeManaged(patchPath, ids) {
       try { unlinkSync(patchPath); } catch { /* 已不存在 */ }
       return { ids: [] };
     }
-    writeFileSync(patchPath + '.tmp', rest + "\n", 'utf8');
-    renameSync(patchPath + '.tmp', patchPath);
+    atomicWrite(patchPath, rest + "\n");
     return { ids: [] };
   }
   const block = renderBlock(ids);
@@ -100,17 +167,14 @@ export function writeManaged(patchPath, ids) {
       next = text.slice(0, insertAt) + block + '\n' + text.slice(insertAt);
     }
   }
-  // 写盘 + 验证：写后必须仍是合法顶层数组，否则回滚
-  const backup = text;
-  writeFileSync(patchPath + '.tmp', next, 'utf8');
+  // 先验证再落盘：写入结果必须仍是合法顶层数组（校验失败则原文件分毫未动）
   try {
     const check = yaml.load(next);
     if (!Array.isArray(check)) throw new Error('写入结果不是顶层数组');
   } catch (e) {
-    try { writeFileSync(patchPath, backup, 'utf8'); } catch { /* 尽力回滚 */ }
-    throw new Error('writeManaged 写入校验失败，已回滚（' + patchPath + '）：' + (e && e.message || e));
+    throw new Error('writeManaged 写入校验失败，已放弃写入（' + patchPath + '）：' + (e && e.message || e));
   }
-  renameSync(patchPath + '.tmp', patchPath);
+  atomicWrite(patchPath, next);
   return { ids: [...ids] };
 }
 
@@ -130,34 +194,57 @@ export function emptyLedger() {
   return { version: 1, entries: [] };
 }
 
+/** 最近一次发现的损坏账本备份路径（供调用方/测试查询）。 */
+let lastCorruptBackup = null;
+export function lastCorruptLedgerBackup() { return lastCorruptBackup; }
+
+/**
+ * 读取隔离账本。
+ * P1-7：只有「文件不存在」才返回空账本；JSON 损坏时先**备份**再返回空账本，
+ * 绝不静默丢弃既有失败次数与审计记录（否则后续写入会直接覆盖掉唯一副本）。
+ * 注意：这里选择「备份后继续」而不是「拒绝写入」——账本是状态文件而非用户配置，
+ * 一个损坏的状态文件不应该让守卫彻底失效；原数据已完整保留在备份里。
+ */
 export function loadLedger(home) {
-  try {
-    const d = JSON.parse(readFileSync(quarantinePath(home), "utf8"));
-    if (d && Array.isArray(d.entries)) return d;
-  } catch { /* first run */ }
+  const p = quarantinePath(home);
+  let text;
+  try { text = readFileSync(p, 'utf8'); }
+  catch (e) {
+    if (e.code === 'ENOENT') return emptyLedger(); // 首次运行
+    throw e;                                       // EACCES 等其它 IO 错误不吞
+  }
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { parsed = undefined; }
+  if (parsed && Array.isArray(parsed.entries)) return parsed;
+  const backup = p + '.corrupt-' + new Date().toISOString().replace(/[:.]/g, '-');
+  try { copyFileSync(p, backup); lastCorruptBackup = backup; } catch { /* 备份失败也要继续 */ }
+  try { process.emitWarning('[dsh-error-tell] 隔离账本损坏，已备份到 ' + backup + ' 并重置为空白（原数据保留）'); } catch { /* 忽略 */ }
   return emptyLedger();
 }
 
 export function saveLedger(home, ledger) {
   const p = quarantinePath(home);
   mkdirSync(dirname(p), { recursive: true });
-  const tmp = p + ".tmp";
-  writeFileSync(tmp, JSON.stringify(ledger, null, 2) + "\n", "utf8");
-  renameSync(tmp, p);
+  atomicWrite(p, JSON.stringify(ledger, null, 2) + "\n");
 }
 
+function ledgerLock(home) { return quarantinePath(home) + '.lock'; }
+
 export function addQuarantine(home, entry) {
-  const ledger = loadLedger(home);
-  const existing = ledger.entries.find(e => e.rowId === entry.rowId && !e.restoredAt);
-  if (existing) {
-    // 同一活动条目：累计连续失败次数（S2：连续 2 次失败才真正禁用）
-    const failCount = (existing.failCount ?? 1) + 1;
-    Object.assign(existing, entry, { at: existing.at, failCount });
-  } else {
-    ledger.entries.push({ ...entry, at: entry.at ?? new Date().toISOString(), failCount: 1 });
-  }
-  saveLedger(home, ledger);
-  return ledger;
+  // P1-4：读→改→写必须整体互斥，否则并发写者丢失更新
+  return withFileLock(ledgerLock(home), () => {
+    const ledger = loadLedger(home);
+    const existing = ledger.entries.find(e => e.rowId === entry.rowId && !e.restoredAt);
+    if (existing) {
+      // 同一活动条目：累计连续失败次数（S2：连续 2 次失败才真正禁用）
+      const failCount = (existing.failCount ?? 1) + 1;
+      Object.assign(existing, entry, { at: existing.at, failCount });
+    } else {
+      ledger.entries.push({ ...entry, at: entry.at ?? new Date().toISOString(), failCount: 1 });
+    }
+    saveLedger(home, ledger);
+    return ledger;
+  });
 }
 
 /** 某行当前活动条目的累计失败次数（无活动条目时为 0）。 */
@@ -167,13 +254,15 @@ export function failureCount(home, rowId) {
 }
 
 export function restoreQuarantine(home, rowId) {
-  const ledger = loadLedger(home);
-  let hit = false;
-  for (const e of ledger.entries) {
-    if (e.rowId === rowId && !e.restoredAt) { e.restoredAt = new Date().toISOString(); hit = true; }
-  }
-  if (hit) saveLedger(home, ledger);
-  return hit;
+  return withFileLock(ledgerLock(home), () => {
+    const ledger = loadLedger(home);
+    let hit = false;
+    for (const e of ledger.entries) {
+      if (e.rowId === rowId && !e.restoredAt) { e.restoredAt = new Date().toISOString(); hit = true; }
+    }
+    if (hit) saveLedger(home, ledger);
+    return hit;
+  });
 }
 
 export function activeQuarantine(home) {
@@ -207,11 +296,30 @@ export function resetRunDisabled(patchPath) {
   else runDisabled.delete(patchPath);
 }
 
-/** 同步把 rowId 加入 managed 禁用段（幂等）。 */
+/**
+ * 行 ID 白名单：只允许 DSH 行 id 实际会出现的字符（包名/子行 id 形态），限长 200。
+ * P2-17：id 会直接参与 YAML 生成（`- id: <id>`）、正则构造与 HTTP 错误响应，
+ * 不校验的话特殊字符可以破坏 YAML 结构、污染日志或泄露内部信息。
+ */
+const ROW_ID_RE = /^[A-Za-z0-9@._:/-]{1,200}$/;
+export function isValidRowId(id) {
+  return typeof id === 'string' && ROW_ID_RE.test(id);
+}
+export function assertValidRowId(id) {
+  if (!isValidRowId(id)) {
+    throw new Error('非法的行 id（仅允许 [A-Za-z0-9@._:/-]，长度 1..200）：' + JSON.stringify(String(id).slice(0, 80)));
+  }
+  return id;
+}
+
+/** 同步把 rowId 加入 managed 禁用段（幂等）。P1-4：读→改→写整体持锁。 */
 export function syncDisable(patchPath, rowId) {
-  const managed = readManaged(patchPath);
-  managed.ids.add(rowId);
-  writeManaged(patchPath, managed.ids);
+  assertValidRowId(rowId);
+  return withFileLock(patchPath + '.lock', () => {
+    const managed = readManaged(patchPath);
+    managed.ids.add(rowId);
+    return writeManagedLocked(patchPath, managed.ids);
+  });
 }
 
 /**
@@ -258,7 +366,8 @@ export function isEnvError(message) {
  * 此时全部只记账不自动禁用。可用环境变量 DSH_ERROR_TELL_BATCH_THRESHOLD 覆盖。
  */
 export function batchThreshold() {
-  return Number(process.env.DSH_ERROR_TELL_BATCH_THRESHOLD || 5);
+  // P2-9：Number("abc") → NaN 会让 `batchCount >= NaN` 恒为 false，熔断被静默击穿
+  return nonNegativeInt(process.env.DSH_ERROR_TELL_BATCH_THRESHOLD, 5);
 }
 /**
  * 记录一次失败：账本必写（可审计）；本次运行新增禁用行数达到 maxDisable 时熔断
@@ -266,6 +375,13 @@ export function batchThreshold() {
  */
 export function recordFailure(home, patchPath, { rowId, pkg, stage, error, source = 'runtime-guard', maxDisable = 5, batchCount = 1, log = () => {} }) {
   if (!rowId) return false;
+  // P2-9：非法配置（NaN/负数/小数）回退默认值，避免熔断条件被击穿
+  maxDisable = nonNegativeInt(maxDisable, 5);
+  // P2-17：id 会进 YAML/日志，非法直接拒绝（只记账不写 managed）
+  if (!isValidRowId(rowId)) {
+    log('[dsh-error-tell] 非法行 id，拒绝处理: ' + JSON.stringify(String(rowId).slice(0, 80)));
+    return false;
+  }
   if (isPendingLikeError(error)) return false; // pending 不是插件失败，不归因
   if (isEnvError(error)) {
     log('[dsh-error-tell] 环境类错误（不归因插件）: ' + rowId + ' — ' + String(error).split('\n')[0]);

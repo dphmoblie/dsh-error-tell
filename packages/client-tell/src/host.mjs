@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged, isProtected } from '@dsh-error-tell/core';
+import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged, isProtected, isValidRowId, nonNegativeInt } from '@dsh-error-tell/core';
 import { INJECT_SCRIPT } from './inject-script.js';
 import { makeMetaResolver } from './meta.mjs';
 
@@ -13,6 +13,22 @@ export const inject = ['webServer'];
 
 const SELF = 'error-tell-client-host';
 const GUARD_HEADER = 'x-dsh-error-tell';
+
+/**
+ * P2-18：来源校验。per-page token 是主防线，但如果页面被注入/被同机其他站点诱导，
+ * 仅靠自定义头 + token 仍不理想，所以再校验 Origin/Referer 是否属于回环地址。
+ * 注意：**只在头部存在时校验**——fetch/XHR 在部分场景（以及 curl / e2e 脚本）不带 Origin，
+ * 若把「缺失」当作拒绝会让合法调用方全部失败；缺失时仍由 token 兜底。
+ * 独立导出以便单测。
+ */
+export function isAllowedOrigin(req) {
+  const raw = req?.headers?.origin || req?.headers?.referer;
+  if (!raw) return true;
+  try {
+    const h = new URL(raw).hostname.replace(/^\[|\]$/g, '');
+    return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+  } catch { return false; }
+}
 
 const MAX_BODY = 65536;
 
@@ -82,7 +98,7 @@ export function apply(ctx) {
   const webServer = ctx.webServer;
   // M3：per-page 随机 token，注入脚本携带，端点校验（跨域页面无法读取）
   const token = process.env.DSH_ERROR_TELL_TOKEN || randomBytes(16).toString('hex');
-  const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 5);
+  const maxDisable = nonNegativeInt(process.env.DSH_ERROR_TELL_MAX_DISABLE, 5); // P2-9：NaN 会让熔断失效
   const manualDisabled = new Set(); // 本次会话手动禁用的行（熔断按增量计数，避免历史自锁）
 
   // 插件元数据解析（package.json description → 面板历史记录展示「这个插件是干什么的」）
@@ -124,7 +140,10 @@ export function apply(ctx) {
     return html.includes('</body>') ? html.replace('</body>', script + '</body>') : html.replace('</head>', script + '</head>');
   });
 
-  const guardHeader = (req) => req.headers[GUARD_HEADER] === '1' && req.headers['x-dsh-error-token'] === token;
+  const guardHeader = (req) =>
+    req.headers[GUARD_HEADER] === '1'
+    && req.headers['x-dsh-error-token'] === token
+    && isAllowedOrigin(req);
 
   // 2) 禁用端点
   const disposeRoute = webServer.register({
@@ -138,6 +157,8 @@ export function apply(ctx) {
       let rowId;
       try { rowId = JSON.parse(raw || '{}').rowId; } catch { return json(res, 400, { ok: false, error: 'bad json' }); }
       if (!rowId || typeof rowId !== 'string') return json(res, 400, { ok: false, error: 'rowId required' });
+      // P2-17：id 会写进 YAML 并回显到错误里，先做字符集/长度校验（也顺带防日志污染）
+      if (!isValidRowId(rowId)) return json(res, 400, { ok: false, error: 'invalid rowId' });
       const found = resolveRow(ctx, rowId);
       if (!found) return json(res, 404, { ok: false, error: 'row not found: ' + rowId });
       if (found === SELF || String(found).startsWith('error-tell-')) return json(res, 403, { ok: false, error: 'refusing to disable self/guard row' });
@@ -174,6 +195,7 @@ export function apply(ctx) {
       let rowId;
       try { rowId = JSON.parse(raw || '{}').rowId; } catch { return json(res, 400, { ok: false, error: 'bad json' }); }
       if (!rowId || typeof rowId !== 'string') return json(res, 400, { ok: false, error: 'rowId required' });
+      if (!isValidRowId(rowId)) return json(res, 400, { ok: false, error: 'invalid rowId' }); // P2-17
       try {
         const hit = restoreQuarantine(home, rowId);
         manualDisabled.delete(rowId);

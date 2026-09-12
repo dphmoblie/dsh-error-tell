@@ -1,7 +1,11 @@
 name: CI
 
 on:
-  workflow_dispatch:  # 仅手动触发（在 Actions 页面点 Run workflow）
+  # P2-19：此前只有 workflow_dispatch，push/PR 完全不跑测试，发布质量全靠人工点击
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:  # 仍可手动触发（例如只想跑 full 全链路）
 
 # 同一分支/PR 新提交自动取消旧 run，避免排队重复安装 dsh（npm i -g 需拉几十个 @deepseek-ai 包）
 concurrency:

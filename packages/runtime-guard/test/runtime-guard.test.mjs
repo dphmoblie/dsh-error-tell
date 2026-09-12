@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { countManaged, recordFailure, syncDisable, resetRunDisabled, culpritOf, stageOf } from '../src/index.mjs';
+import { countManaged, recordFailure, syncDisable, resetRunDisabled, culpritOf, stageOf, rollbackWritten, apply } from '../src/index.mjs';
+import { readManaged, activeQuarantine } from '@dsh-error-tell/core';
 
 const MANAGED_HEAD = '# --- dsh-error-tell managed (auto-generated; do not edit) ---';
 const MANAGED_END = '# --- end dsh-error-tell managed ---';
@@ -107,4 +108,68 @@ test('recordFailure：本次运行新增达到上限时熔断，账本仍写但�
     assert.ok(ledger.entries.some(e => e.rowId === 'bad-2'), '账本仍记录（可审计）');
     assert.ok(logs.some(m => m.includes('熔断')), '输出熔断日志');
   } finally { cleanup(); }
+});
+
+// ---------- P1-5：批量回滚只撤本进程写入的行 ----------
+test('rollbackWritten：只回滚本进程写入的 id，历史禁用项必须原样保留（P1-5 回归）', () => {
+  const { home, patch, cleanup } = tmpHome();
+  try {
+    // 历史遗留（上一个进程写的）
+    syncDisable(patch, 'historical-bad');
+    // 本进程写入的
+    syncDisable(patch, 'mine-1');
+    syncDisable(patch, 'mine-2');
+
+    const rolled = rollbackWritten(home, patch, new Set(['mine-1', 'mine-2']));
+    assert.deepEqual(rolled.sort(), ['mine-1', 'mine-2'], '只回滚本进程的两个');
+    const ids = [...readManaged(patch).ids];
+    assert.ok(ids.includes('historical-bad'), '历史禁用项绝不能被批量熔断误恢复，实际: ' + ids.join(','));
+    assert.ok(!ids.includes('mine-1') && !ids.includes('mine-2'), '本进程写入的应被撤销');
+  } finally { cleanup(); }
+});
+
+test('rollbackWritten：空集合时不动任何配置', () => {
+  const { home, patch, cleanup } = tmpHome();
+  try {
+    syncDisable(patch, 'keep-me');
+    assert.deepEqual(rollbackWritten(home, patch, new Set()), []);
+    assert.ok(readManaged(patch).ids.has('keep-me'));
+  } finally { cleanup(); }
+});
+
+// ---------- P2-8：seen 去重时机 ----------
+function mockCtx() {
+  const handlers = new Map();
+  const logs = [];
+  return {
+    logs,
+    on(evt, fn) { if (!handlers.has(evt)) handlers.set(evt, []); handlers.get(evt).push(fn); },
+    loader: { entries: () => [] },
+    logger: { error: (m) => logs.push(String(m)), info: () => {} },
+    fire(evt, ...args) { for (const fn of handlers.get(evt) || []) fn(...args); }
+  };
+}
+
+test('apply：先来的 pending 事件不得占用去重位，后续真实失败仍要处理（P2-8 回归）', () => {
+  const { home, patch, cleanup } = tmpHome();
+  const prevHome = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  resetRunDisabled(patch);
+  try {
+    const ctx = mockCtx();
+    apply(ctx);
+    const fiber = (err) => ({ state: 3, name: '@x/p1', _error: err, entry: { options: { id: 'p1', name: '@x/p1' } } });
+
+    // 第 1 次：pending（不是插件自身失败，不应占用 seen）
+    ctx.fire('internal/status', fiber('pending (waiting for service: typert)'));
+    assert.ok(!readManaged(patch).ids.has('p1'), 'pending 不应禁用');
+
+    // 第 2 次：同一行的真实失败 → 原实现会因 seen 已含 p1 而整条跳过
+    ctx.fire('internal/status', fiber('apply failed: real boom'));
+    assert.ok(readManaged(patch).ids.has('p1'), '真实失败必须仍被处理并禁用（原实现会被 seen 去重跳过）');
+    assert.ok(activeQuarantine(home).some(e => e.rowId === 'p1'), '账本应记录真实失败');
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prevHome;
+    cleanup();
+  }
 });

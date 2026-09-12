@@ -4,7 +4,9 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
-import { writeManaged, readManaged, assertPatchParseable, isProtected, isPendingLikeError, isEnvError, recordFailure, syncDisable } from '../src/index.mjs';
+import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { writeManaged, readManaged, assertPatchParseable, isProtected, isPendingLikeError, isEnvError, recordFailure, syncDisable, loadLedger, saveLedger, addQuarantine, withFileLock, nonNegativeInt, isValidRowId, lastCorruptLedgerBackup, quarantinePath } from '../src/index.mjs';
 
 const _require = createRequire(import.meta.url);
 const yaml = _require('js-yaml');
@@ -124,4 +126,131 @@ test('isPendingLikeError 判定', () => {
   assert.equal(isPendingLikeError('x: pending (waiting for service: typert)'), true);
   assert.equal(isPendingLikeError('x: did not activate'), true);
   assert.equal(isPendingLikeError('apply failed: boom'), false);
+});
+
+// ---------- P1-6：全新 DSH_HOME ----------
+test('writeManaged：patch 与父目录都不存在时自动创建（P1-6 全新 DSH_HOME 回归）', () => {
+  const dir = tmpDir();
+  const p = join(dir, 'brand-new', 'nested', 'cordis.patch.yml');
+  assert.ok(!existsSync(join(dir, 'brand-new')), '前置：父目录确实不存在');
+  writeManaged(p, ['x-bad']);
+  assert.ok(existsSync(p), '应自动创建目录并写出文件');
+  assert.ok(readFileSync(p, 'utf8').includes('- id: x-bad'));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------- P1-7：损坏账本 ----------
+test('loadLedger：损坏的账本会先备份再重置，不静默丢弃（P1-7 回归）', () => {
+  const home = tmpDir();
+  const p = quarantinePath(home);
+  writeManaged(p, []); // 建立父目录
+  writeFileSync(p, '{ 这不是合法 JSON', 'utf8');
+  const led = loadLedger(home);
+  assert.deepEqual(led.entries, [], '损坏时返回空账本以便继续运行');
+  const backup = lastCorruptLedgerBackup();
+  assert.ok(backup && existsSync(backup), '必须留下备份：' + backup);
+  assert.equal(readFileSync(backup, 'utf8'), '{ 这不是合法 JSON', '备份内容与原文一致');
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('loadLedger：结构非法（entries 不是数组）同样走备份路径；不存在的文件才是空账本', () => {
+  const home = tmpDir();
+  assert.deepEqual(loadLedger(home).entries, [], '文件不存在 → 空账本');
+  const p = quarantinePath(home);
+  writeManaged(p, []);
+  writeFileSync(p, '{"version":1,"entries":"oops"}', 'utf8');
+  assert.deepEqual(loadLedger(home).entries, []);
+  assert.ok(lastCorruptLedgerBackup() && existsSync(lastCorruptLedgerBackup()), '结构非法也要备份');
+  rmSync(home, { recursive: true, force: true });
+});
+
+// ---------- P2-9：整数解析 ----------
+test('nonNegativeInt：NaN / 负数 / 小数 / 空值回退默认，避免熔断被击穿（P2-9 回归）', () => {
+  assert.equal(nonNegativeInt('abc', 5), 5);
+  assert.equal(nonNegativeInt('', 5), 5);
+  assert.equal(nonNegativeInt(undefined, 5), 5);
+  assert.equal(nonNegativeInt('-1', 5), 5);
+  assert.equal(nonNegativeInt('1.5', 5), 5, '小数不是合法整数配置');
+  assert.equal(nonNegativeInt('0', 5), 0, '0 是合法值');
+  assert.equal(nonNegativeInt('7', 5), 7);
+  assert.equal(nonNegativeInt(7, 5), 7);
+});
+
+// ---------- P2-17：rowId 校验 ----------
+test('isValidRowId / syncDisable：拒绝会破坏 YAML 或超长的行 id（P2-17 回归）', () => {
+  assert.equal(isValidRowId('fixture-bad-apply'), true);
+  assert.equal(isValidRowId('@scope/pkg:child'), true);
+  assert.equal(isValidRowId('a'.repeat(200)), true);
+  assert.equal(isValidRowId('a'.repeat(201)), false, '超长拒绝');
+  assert.equal(isValidRowId('bad id'), false, '空格拒绝');
+  assert.equal(isValidRowId('bad\nid'), false, '换行拒绝');
+  assert.equal(isValidRowId("#inject"), false, 'YAML 注释符拒绝');
+  assert.equal(isValidRowId('a: b'), false);
+  assert.equal(isValidRowId(123), false, '非字符串拒绝');
+
+  const dir = tmpDir();
+  const p = join(dir, 'cordis.patch.yml');
+  assert.throws(() => syncDisable(p, 'bad id'), /非法的行 id/);
+  assert.throws(() => syncDisable(p, 'a'.repeat(201)), /非法的行 id/);
+  assert.ok(!existsSync(p), '拒绝时不应写出任何文件');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------- P1-4：跨进程互斥 ----------
+test('withFileLock：同一路径不可重入（第二次获取超时抛错），释放后可再获取', () => {
+  const dir = tmpDir();
+  const lock = join(dir, 'x.lock');
+  withFileLock(lock, () => {
+    assert.throws(() => withFileLock(lock, () => {}, { timeoutMs: 50 }), /获取文件锁超时/);
+  });
+  assert.doesNotThrow(() => withFileLock(lock, () => {}, { timeoutMs: 50 }), '释放后应能再次获取');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('withFileLock：并发写者持锁放大窗口也不丢失更新（P1-4 跨进程回归）', async () => {
+  const N = 6;
+  const home = tmpDir();
+  const worker = join(home, 'worker.mjs');
+  const core = pathToFileURL(join(import.meta.dirname, '..', 'src', 'index.mjs')).href;
+  writeFileSync(worker, [
+    `import { withFileLock, loadLedger, saveLedger, quarantinePath } from ${JSON.stringify(core)};`,
+    'const [home, i] = process.argv.slice(2);',
+    "withFileLock(quarantinePath(home) + '.lock', () => {",
+    '  const led = loadLedger(home);',
+    '  const end = Date.now() + 40; while (Date.now() < end) { /* 持锁期间放大窗口 */ }',
+    "  led.entries.push({ rowId: 'r' + i, failCount: 1 });",
+    '  saveLedger(home, led);',
+    '});'
+  ].join('\n'), 'utf8');
+
+  await Promise.all(Array.from({ length: N }, (_, i) => new Promise((res) => {
+    const c = spawn(process.execPath, [worker, home, String(i)], { stdio: 'ignore' });
+    c.on('close', res);
+    c.on('error', res);
+  })));
+
+  const entries = loadLedger(home).entries;
+  assert.equal(entries.length, N, '持锁后并发写入不应丢失任何一条，实际 ' + entries.length + '/' + N);
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('addQuarantine：并发调用（真实路径）不丢失条目', async () => {
+  const N = 6;
+  const home = tmpDir();
+  const worker = join(home, 'worker.mjs');
+  const core = pathToFileURL(join(import.meta.dirname, '..', 'src', 'index.mjs')).href;
+  writeFileSync(worker, [
+    `import { addQuarantine } from ${JSON.stringify(core)};`,
+    'const [home, i] = process.argv.slice(2);',
+    "addQuarantine(home, { rowId: 'row-' + i, stage: 'import', error: 'boom', source: 'race' });"
+  ].join('\n'), 'utf8');
+
+  await Promise.all(Array.from({ length: N }, (_, i) => new Promise((res) => {
+    const c = spawn(process.execPath, [worker, home, String(i)], { stdio: 'ignore' });
+    c.on('close', res);
+    c.on('error', res);
+  })));
+
+  assert.equal(loadLedger(home).entries.length, N, 'addQuarantine 并发写不应丢失条目');
+  rmSync(home, { recursive: true, force: true });
 });

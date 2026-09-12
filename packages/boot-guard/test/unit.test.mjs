@@ -7,7 +7,7 @@ import { parsePatchYaml } from '../src/yaml.mjs';
 import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, failureCount } from '../src/quarantine.mjs';
 import { readManaged, writeManaged } from '../src/patch-writer.mjs';
 import { MANAGED_START, MANAGED_END } from '../src/home.mjs';
-import { inferFailures, assertDisableLimit, decideDisable, writeProbePatch } from '../src/guard.mjs';
+import { inferFailures, assertDisableLimit, decideDisable, writeProbePatch, canAddDisable } from '../src/guard.mjs';
 
 test('parsePatchYaml 容忍 !!js 表达式（dump-config 形态）', async () => {
   const text = [
@@ -117,6 +117,29 @@ test('assertDisableLimit 熔断：超限抛错，限内通过', () => {
   assert.throws(() => assertDisableLimit(new Set(['a', 'b']), 1), /熔断/);
   assert.doesNotThrow(() => assertDisableLimit(new Set(['a', 'b']), 2));
   assert.doesNotThrow(() => assertDisableLimit(new Set(), 50));
+});
+
+test('canAddDisable：重启归因路径的实时熔断（P1-2 回归）', () => {
+  // 原实现只在 precheck 阶段校验一次，重启归因时直接 add + writeManaged，
+  // 多个坏插件可以借启动失败路径把禁用数顶到 maxDisable 之上。
+  assert.equal(canAddDisable(new Set(), 1), true, '尚未禁用任何行 → 可加');
+  assert.equal(canAddDisable(new Set(['a']), 1), false, '已达上限 → 不可再加');
+  assert.equal(canAddDisable(new Set(['a', 'b']), 5), true);
+  assert.equal(canAddDisable(new Set(['a', 'b']), 0), false, '上限 0 → 一律不加');
+});
+
+test('inferFailures：id/name 为非字符串时不抛错（P2-12 回归）', () => {
+  const rows = [{ id: 123, name: 456 }, { id: 'ok', name: '@x/ok' }];
+  assert.doesNotThrow(() => inferFailures('boom id: 123', rows));
+  assert.deepEqual(inferFailures('boom id: 123', rows), ['123'], '数字 id 转字符串后仍可归因');
+});
+
+test('inferFailures：包名后跟逗号/句号/方括号等常见标点也能命中（P2-13 回归）', () => {
+  const rows = [{ id: 'a', name: '@x/a' }];
+  for (const tail of [',', '.', ';', ']', '}', ')', '!', '?']) {
+    assert.deepEqual(inferFailures('apply failed for @x/a' + tail + ' done', rows), ['a'], '标点 ' + tail + ' 应命中');
+  }
+  assert.deepEqual(inferFailures('boom @x/ab done', rows), [], '仍不得命中同前缀包');
 });
 test('inferFailures 从 stderr 归因行', () => {
   const rows = [

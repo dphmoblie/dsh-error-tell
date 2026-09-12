@@ -32,10 +32,11 @@ const usage = [
 ].join('\n');
 if (values.help) { console.log(usage); process.exit(0); }
 
-function numOption(name, value) {
+function numOption(name, value, { max } = {}) {
   const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) {
-    console.error('参数错误: --' + name + ' 需要非负数字，得到 ' + JSON.stringify(value));
+  // P2-9：必须是整数（原实现接受 1.5 这类小数），并支持上限校验
+  if (!Number.isInteger(n) || n < 0 || (max !== undefined && n > max)) {
+    console.error('参数错误: --' + name + ' 需要 ' + (max !== undefined ? '0..' + max : '非负') + ' 的整数，得到 ' + JSON.stringify(value));
     process.exit(2);
   }
   return n;
@@ -47,6 +48,9 @@ const home = dshHome();
 if (cmd === 'guard') {
   let r;
   try {
+  // P1-1：parseArgs 解析出的 port 此前从未传给 guard()，导致 --port 被静默忽略。
+  // 区分「未传入」（undefined → 不向 dsh 传 --port，沿用 dsh 自身默认端口）与「显式 --port 0」。
+  const port = values.port === undefined ? undefined : numOption('port', values.port, { max: 65535 });
   r = await guard({
     profile: values.profile,
     patchFiles: values.patch,
@@ -57,7 +61,7 @@ if (cmd === 'guard') {
     importChecks: !values["no-import-checks"],
     dshBin: values.dsh,
     timeoutMs: numOption('timeout-ms', values["timeout-ms"] || 120000),
-    // M2：默认不传 --port（沿用 dsh 默认 3080）；用户显式给才传
+    port,
     quitAfterMs: Number(process.env.DSH_ERROR_TELL_QUIT_AFTER_MS || 0),
     extraArgs: passthrough,
     env: process.env
