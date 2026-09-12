@@ -1,8 +1,9 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { composeRows, runDsh } from './compose.mjs';
-import { runChecks } from './checks.mjs';
+import { runChecks, clearImportCache } from './checks.mjs';
 import { loadLedger, addQuarantine, activeQuarantine, restoreQuarantine, failureCount } from './quarantine.mjs';
 import { readManaged, writeManaged } from './patch-writer.mjs';
 import { dshHome, homePatchPath } from './home.mjs';
@@ -43,13 +44,35 @@ export function inferFailures(stderr, rows) {
     const n = escapeRegExp(row.name);
     if (new RegExp('(?:^|[\\r\\n])' + n + ':').test(s)) { hits.add(row.id); continue; }
     if (new RegExp('(?:^|[\\s"\'/(])' + n + '(?=[\\s"\':)])').test(s)) { hits.add(row.id); continue; }
-    if (s.includes('id: ' + row.id) || s.includes('entry ' + row.id) || s.includes('"' + row.id + '"')) hits.add(row.id);
+    // 显式 id 引用：必须带词边界。原实现用裸 includes('id: ' + id)，
+    // 导致 id 互为前缀时互相命中（如 'a' 命中 'id: ab'）→ 误禁用**错误的**插件。
+    const rid = escapeRegExp(row.id);
+    if (new RegExp('id:\\s*' + rid + '(?![\\w.-])').test(s)) { hits.add(row.id); continue; }
+    if (new RegExp('(?:^|[\\s"\'/(])entry\\s+' + rid + '(?![\\w.-])').test(s)) { hits.add(row.id); continue; }
+    if (s.includes('"' + row.id + '"')) hits.add(row.id);
   }
   return [...hits];
 }
 
-/** 生成探针覆盖 patch：把已禁用行临时覆盖为 disabled: false（真实加载一次验证是否已修复）。 */
-export function writeProbePatch(ids, dir) {
+/**
+ * 自动探测 dsh 安装目录（用于 import 干跑的第二个解析锚点）。
+ * 为什么必须探测：官方行（如 @deepseek-ai/cordis-plugin-timer）只在 dsh 发行目录的 node_modules 里，
+ * 从沙箱 profile 目录解析不到。CLI 以前从不传 dshInstall，于是**每次真实运行都会把官方行判成
+ * import 失败并写进账本**（M8 的一类：干跑与真实加载管线不一致）。探测失败返回 undefined，
+ * 干跑退回只用 profileDir（行为与修复前一致）。
+ */
+function detectDshInstall() {
+  try {
+    // 注意：不能写成 spawnSync('npm.cmd', ['root','-g'])——Node 不允许无 shell 执行 .cmd/.bat（会 EINVAL），
+    // 而传 args 数组 + shell:true 又会触发 DEP0190。用「已转义的命令串」两者都避开。
+    const npmRoot = spawnSync('npm root -g', { encoding: 'utf8', windowsHide: true, shell: true, timeout: 15000 });
+    const root = (npmRoot.stdout || '').trim();
+    if (npmRoot.status === 0 && root) return join(root, '@deepseek-ai', 'dsh');
+  } catch { /* 探测失败不阻塞 */ }
+  return undefined;
+}
+
+/** 生成探针覆盖 patch：把已禁用行临时覆盖为 disabled: false（真实加载一次验证是否已修复）。 */export function writeProbePatch(ids, dir) {
   if (!ids || ids.size === 0) return null;
   mkdirSync(dir, { recursive: true });
   const file = join(dir, 'dsh-error-tell-probe-' + Math.random().toString(16).slice(2) + '.yml');
@@ -72,6 +95,7 @@ export async function guard(opts = {}) {
   } = opts;
   const home = dshHome(env);
   const patchPath = homePatchPath(home);
+  clearImportCache(); // 每次守护重新干跑，避免复用上次（可能已修好）的 import 结果
   // 写前自检：home patch 必须可解析，否则拒绝任何 managed 写入
   try { assertPatchParseable(patchPath); } catch (e) {
     log('[dsh-error-tell] ' + e.message);
@@ -101,7 +125,7 @@ export async function guard(opts = {}) {
     const issues = await runChecks(rows, {
       importChecks,
       profileDir: profileDir || join(home, "profiles", profile),
-      dshInstall,
+      dshInstall: dshInstall || detectDshInstall(),
       skipPackages: [...SELF_IDS]
     });
     const failures = issues.filter(i => i.severity === 'error');

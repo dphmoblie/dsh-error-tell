@@ -1,12 +1,12 @@
 // e2e：沙箱 DSH_HOME 全链路（坏插件 → 失败 → guard 禁用 → 重启成功 → restore）
 // 不触碰真实 ~/.dsh。
-import { spawn, execFileSync } from 'node:child_process';
-import { createServer as createProbeServer } from 'node:net';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { linkProfile } from './link-profile.mjs';
+// P1：统一辅助模块——参数转义 / 超时杀进程树 / POSIX 进程组都只有一份实现
+import { originOf, parseWebUrl, run, startServer } from './helpers.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -18,20 +18,6 @@ const profileDir = join(home, 'profiles', 'web');
 mkdirSync(profileDir, { recursive: true });
 
 const env = { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' };
-
-function run(cmd, args, opts = {}) {
-  return new Promise((resolve) => {
-    // L9：args + shell:true 触发 DEP0190；拼接为命令串
-    const cmdline = [cmd, ...args.map(a => '"' + String(a).replace(/"/g, '\\"') + '"')].join(' ');
-    const child = spawn(cmdline, { ...opts, env: { ...env, ...(opts.env || {}) }, windowsHide: true, shell: true });
-    let out = '', err = '';
-    const timer = setTimeout(() => { try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { child.kill(); } resolve({ code: null, stdout: out, stderr: err, timedOut: true }); }, opts.timeoutMs || 120000);
-    child.stdout?.on('data', d => out += d);
-    child.stderr?.on('data', d => err += d);
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout: out, stderr: err }); });
-    child.on('error', e => { clearTimeout(timer); resolve({ code: null, stdout: out, stderr: err, error: e.message }); });
-  });
-}
 
 function ok(cond, msg) {
   if (!cond) { console.error('✖ FAIL:', msg); process.exitCode = 1; } else console.log('✔', msg);
@@ -142,8 +128,10 @@ try { rgPatch = readFileSync(join(homeB, 'cordis.patch.yml'), 'utf8'); } catch {
 ok(rgPatch.includes('- id: fixture-bad-apply') && rgPatch.includes('disabled: true'), '[B] runtime-guard 已写入 managed 禁用段');
 
 // ===== Phase C：client-tell —— 加载页注入 + 禁用端点 + 组合图排除 ===== 
-// M5：随机空闲端口（避免固定端口冲突/被占用）
-const PORT_C = await new Promise((res) => { const s = createProbeServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
+// M5：不预先探测端口。原做法「开探针拿端口 → 关闭 → 让 dsh 绑同一端口」存在 TOCTOU 竞态
+// （关闭到绑定之间端口可能被别人抢走 → EADDRINUSE，而 EADDRINUSE 属环境类错误会被归因逻辑过滤掉，
+// guard 只会熔断退出）。dsh 的 web-app 打印 `${localWebUrl}?token=...`，而 localWebUrl 用的是
+// ctx.get("webServer").port（实际绑定端口），所以 `--port 0` 完全够用：从 stdout 取真实端口即可。
 const homeC = join(tmp, 'homeC');
 const profileC = join(homeC, 'profiles', 'web');
 mkdirSync(profileC, { recursive: true });
@@ -169,17 +157,19 @@ linkProfile(profileC, {
   '@dsh-error-tell/fixture-bad-client': 'packages/test-fixtures/bad-client'
 });
 ok(true, '[C] 沙箱依赖已链接（junction）');
-const serverC = spawn('dsh', ['--profile', 'web', '--port', String(PORT_C), '--no-open'], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' }, windowsHide: true, shell: true });
-let serverOut = '', serverErr = '', webUrlC = '', sessionCookie = '';
-serverC.stdout?.on('data', d => { serverOut += d; const m = serverOut.match(/dsh web: (https?:\/\/[^\s]+\?token=[A-Za-z0-9_\-]+)/); if (m && !webUrlC) webUrlC = m[1]; });
-serverC.stderr?.on('data', d => serverErr += d);
-const pageUrlC = () => webUrlC || ('http://127.0.0.1:' + PORT_C + '/');
+const serverC = startServer('dsh', ['--profile', 'web', '--port', '0', '--no-open'], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' } });
+let sessionCookie = '';
+// 真实端口来源：dsh 打印的 URL（--port 0 时即实际绑定的临时端口）
+const webUrlC = () => parseWebUrl(serverC.stdout());
+const originC = () => originOf(webUrlC());
 const pageFetchC = async () => {
-  const first = await fetch(pageUrlC(), { redirect: 'manual', headers: sessionCookie ? { cookie: sessionCookie } : {} });
+  const base = originC();
+  if (!base) throw new Error('dsh 尚未打印 web URL');
+  const first = await fetch(webUrlC(), { redirect: 'manual', headers: sessionCookie ? { cookie: sessionCookie } : {} });
   if (first.status === 303) {
     const sc = first.headers.get('set-cookie');
     if (sc) sessionCookie = sc.split(';')[0];
-    return fetch('http://127.0.0.1:' + PORT_C + '/', { headers: sessionCookie ? { cookie: sessionCookie } : {} });
+    return fetch(base + '/', { headers: sessionCookie ? { cookie: sessionCookie } : {} });
   }
   return first;
 };
@@ -193,7 +183,7 @@ let html1 = '';
 try { html1 = await (await pageFetchC()).text(); } catch { /* 忽略 */ }
 ok(html1.includes('// dsh-error-tell 注入脚本'), '[C] 注入脚本已出现在 index.html');
 ok(html1.includes('fixture-bad-client'), '[C] __DSH_BOOT__ 含坏 client 行（浏览器将白屏失败）');
-const disableRes = await fetch('http://127.0.0.1:' + PORT_C + '/api/error-tell/disable', {
+const disableRes = await fetch(originC() + '/api/error-tell/disable', {
   method: 'POST',
   headers: { 'content-type': 'application/json', 'x-dsh-error-tell': '1', 'x-dsh-error-token': 'test-token' },
   body: JSON.stringify({ rowId: '@dsh-error-tell/fixture-bad-client' })
@@ -210,7 +200,7 @@ const patchC = readFileSync(join(homeC, 'cordis.patch.yml'), 'utf8');
 ok(patchC.includes('- id: fixture-bad-client') && patchC.includes('disabled: true'), '[C] home patch 已禁用（source=client-tell）');
 const ledgerC = JSON.parse(readFileSync(join(homeC, 'state', 'dsh-error-tell', 'quarantine.json'), 'utf8'));
 ok(ledgerC.entries.some(e2 => e2.rowId === 'fixture-bad-client' && e2.source === 'client-tell'), '[C] 账本记录 source=client-tell');
-try { execFileSync('taskkill', ['/PID', String(serverC.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { serverC.kill(); }
+serverC.stop();
 
 // ===== Phase D：宿主 import 失败 —— boot-guard 预检拦截（无需重启） =====
 const homeD = join(tmp, 'homeD');

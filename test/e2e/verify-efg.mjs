@@ -1,28 +1,16 @@
 // 阶段验证 2：Phase E（幂等性）+ F（YAML 损坏）+ G（多坏插件）
-import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { linkProfile } from './link-profile.mjs';
+// P1：统一辅助模块——参数转义/超时杀进程树/POSIX 进程组都只有一份实现
+import { run } from './helpers.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
 const tmp = mkdtempSync(join((await import('node:os')).tmpdir(), 'det-efg-'));
 let failed = 0;
 function ok(cond, msg) { if (!cond) { failed++; console.error('✖ FAIL:', msg); } else console.log('✔', msg); }
-function run(cmd, args, opts = {}) {
-  return new Promise((resolve) => {
-    // L9：args + shell:true 会触发 Node DEP0190；拼接为命令串（参数加引号）
-    const cmdline = [cmd, ...args.map(a => '"' + String(a).replace(/"/g, '\\"') + '"')].join(' ');
-    const child = spawn(cmdline, { ...opts, env: { ...process.env, ...(opts.env || {}) }, windowsHide: true, shell: true });
-    let out = '', err = '';
-    const timer = setTimeout(() => { child.kill(); resolve({ code: null, stdout: out, stderr: err, timedOut: true }); }, opts.timeoutMs || 60000);
-    child.stdout?.on('data', d => out += d);
-    child.stderr?.on('data', d => err += d);
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout: out, stderr: err }); });
-    child.on('error', e => { clearTimeout(timer); resolve({ code: null, stdout: out, stderr: err, error: e.message }); });
-  });
-}
 function mkProfile(home, deps, rows) {
   const profileDir = join(home, 'profiles', 'web');
   mkdirSync(profileDir, { recursive: true });

@@ -118,7 +118,7 @@ dsh-error-tell restore <rowId>
 
 ## 验证记录
 
-- 单元测试 35 项：core + boot-guard + runtime-guard + 注入脚本 VM ×7 + meta 解析 ×4 + 客户端模块 VM ×3（设置分区注册契约）
+- 单元测试 62 项：core + boot-guard + runtime-guard + 注入脚本 VM ×7 + meta 解析 ×4 + 客户端模块 VM ×3（设置分区注册契约）+ runChecks 干跑编排 ×5 + Windows 参数转义 ×6 + 熔断增量语义回归 ×1 + cause 链归因 ×4（`culpritOf`/`stageOf`）+ e2e 辅助 ×7（web URL 解析 / 参数安全 / **超时无孤儿进程**）
 - e2e Phase A–H：坏插件 → 启动失败 → 自动禁用 → 重启成功；runtime-guard 进程退出前落盘；client-tell 端点 + 组合图排除；import 预检拦截；幂等性（零副作用）；YAML 损坏友好失败；多坏插件；挂起超时熔断
 - 详见 [docs/verification.md](docs/verification.md)
 

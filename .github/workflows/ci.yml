@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   fast:
-    name: 单元测试 + 分段 e2e（C/D/EFG/S3）
+    name: 单元测试 + 分段 e2e（C/D/EFG/S3/H）
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -36,6 +36,8 @@ jobs:
         run: pnpm e2e:efg
       - name: e2e S3（端点 maxDisable 熔断）
         run: pnpm e2e:s3c
+      - name: e2e Phase H（apply 挂起 → 进程级超时 → 熔断）
+        run: pnpm e2e:h
 
 
   unit-linux:

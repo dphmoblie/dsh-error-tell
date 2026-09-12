@@ -1,6 +1,7 @@
 // S2 验证：场景 A（连续 2 次失败才禁用）+ 场景 B（探针成功自动恢复）
 import { execSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { linkProfile } from './link-profile.mjs';
@@ -8,7 +9,8 @@ import { linkProfile } from './link-profile.mjs';
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
 const FIXTURE = join(ROOT, 'packages', 'test-fixtures', 'bad-apply');
-const tmp = mkdtempSync(join(process.env.TEMP || 'C:\\Users\\user\\AppData\\Local\\Temp', 's2-'));
+// M5：原为 process.env.TEMP || 'C:\\Users\\user\\AppData\\Local\\Temp'（硬编码 Windows 路径）
+const tmp = mkdtempSync(join(tmpdir(), 's2-'));
 const home = join(tmp, 'home');
 const profileDir = join(home, 'profiles', 'web');
 mkdirSync(profileDir, { recursive: true });

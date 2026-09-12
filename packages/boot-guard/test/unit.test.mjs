@@ -131,7 +131,12 @@ test('inferFailures 从 stderr 归因行', () => {
   assert.deepEqual(inferFailures('boom @x/ab failed', rows2), ['ab'], '短名 a 不应命中 @x/ab');
   assert.deepEqual(inferFailures('boom @x/a/b failed', rows2), [], '路径后缀不应命中');
   assert.deepEqual(inferFailures('line1\n@x/a: apply failed', rows2), ['a'], '行首 name: 格式命中');
-  // 事故修复：pending 行不归因（waiting for service 里的服务名不是插件名）
+  // 回归：id 互为前缀时不得互相误归因（原裸 includes 会把 'a' 也命中 'id: ab' → 禁用错误的插件）
+  assert.deepEqual(inferFailures('boom id: ab', rows2), ['ab'], 'id 前缀 a 不应命中 id: ab');
+  assert.deepEqual(inferFailures('entry ab failed', rows2), ['ab'], 'entry 前缀 a 不应命中 entry ab');
+  assert.deepEqual(inferFailures('boom id: a', rows2), ['a'], '精确 id 仍应命中');
+  assert.deepEqual(inferFailures('boom id: a-extra', rows2), [], '连字符后缀不应命中 id: a');
+  // pending 行不归因（waiting for service 里的服务名不是插件名）
   assert.deepEqual(inferFailures('@x/a: pending (waiting for service: typert)', rows2), [], 'pending 行被剔除');
   assert.deepEqual(inferFailures('boom @x/a did not activate', rows2), [], 'did not activate 不归因');
 

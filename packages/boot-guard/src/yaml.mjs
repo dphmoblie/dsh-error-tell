@@ -15,7 +15,9 @@ export async function loadYaml() {
     const candidates = [process.env.DSH_INSTALL];
     try {
       const { spawnSync } = await import('node:child_process');
-      const npmRoot = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['root', '-g'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+      // 注意：spawnSync('npm.cmd', [...]) 在 Node 上会 EINVAL（不允许无 shell 执行 .cmd/.bat），
+      // 所以用命令串 + shell:true（也避开 args 数组 + shell 的 DEP0190）。
+      const npmRoot = spawnSync('npm root -g', { encoding: 'utf8', windowsHide: true, shell: true, timeout: 15000 });
       if (npmRoot.status === 0 && npmRoot.stdout.trim()) candidates.push(join(npmRoot.stdout.trim(), '@deepseek-ai', 'dsh'));
     } catch { /* 探测失败则跳过 */ }
     for (const c of candidates.filter(Boolean)) {

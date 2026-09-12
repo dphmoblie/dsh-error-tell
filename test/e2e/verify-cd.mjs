@@ -1,28 +1,18 @@
 // 阶段验证 1：Phase C（client-tell）+ Phase D（import 预检拦截）
-import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { linkProfile } from './link-profile.mjs';
+// P1：统一辅助模块——参数转义/超时杀进程树/POSIX 进程组都只有一份实现
+import { originOf, parseWebUrl, run, startServer } from './helpers.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
-const tmp = mkdtempSync(join(process.env.TEMP || 'C:\\Users\\user\\AppData\\Local\\Temp', 'det-cd-'));
+// M5：原为 process.env.TEMP || 'C:\\Users\\user\\AppData\\Local\\Temp'（硬编码 Windows 路径，非 Windows 直接失败）
+const tmp = mkdtempSync(join(tmpdir(), 'det-cd-'));
 let failed = 0;
 function ok(cond, msg) { if (!cond) { failed++; console.error('✖ FAIL:', msg); } else console.log('✔', msg); }
-function run(cmd, args, opts = {}) {
-  return new Promise((resolve) => {
-    // L9：args + shell:true 会触发 Node DEP0190；拼接为命令串（参数加引号）
-    const cmdline = [cmd, ...args.map(a => '"' + String(a).replace(/"/g, '\\"') + '"')].join(' ');
-    const child = spawn(cmdline, { ...opts, env: { ...process.env, ...(opts.env || {}) }, windowsHide: true, shell: true });
-    let out = '', err = '';
-    const timer = setTimeout(() => { child.kill(); resolve({ code: null, stdout: out, stderr: err, timedOut: true }); }, opts.timeoutMs || 60000);
-    child.stdout?.on('data', d => out += d);
-    child.stderr?.on('data', d => err += d);
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout: out, stderr: err }); });
-    child.on('error', e => { clearTimeout(timer); resolve({ code: null, stdout: out, stderr: err, error: e.message }); });
-  });
-}
 function mkProfile(home, deps, rows) {
   const profileDir = join(home, 'profiles', 'web');
   mkdirSync(profileDir, { recursive: true });
@@ -50,24 +40,22 @@ linkProfile(profileC, {
 });
 ok(true, '[C] 沙箱依赖已链接（junction）');
 const envC = { ...process.env, DSH_HOME: homeC, DSH_TELEMETRY_DISABLED: '1' };
-// M5：随机空闲端口（避免固定端口冲突）
-import { createServer as createProbeServer } from 'node:net';
-const PORT = await new Promise((res) => { const s = createProbeServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
-const server = spawn('dsh', ['--profile', 'web', '--port', String(PORT)], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' }, windowsHide: true, shell: true });
-let ready = false, exitCode = null;
-server.on('exit', (c) => { exitCode = c; });
-server.stderr?.on('data', () => {});
-for (let i = 0; i < 30; i++) {
-  try { const r = await fetch('http://127.0.0.1:' + PORT + '/'); if (r.status === 200) { ready = true; break; } } catch {}
-  if (exitCode !== null) break;
+// M5：不预先探测端口。原「探针拿端口 → 关闭 → 让 dsh 绑同一端口」有 TOCTOU 竞态；
+// dsh 打印的 `dsh web: <url>?token=` 里就是实际绑定端口，故用 --port 0 + 从 stdout 取端口。
+const server = startServer('dsh', ['--profile', 'web', '--port', '0'], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' } });
+let ready = false;
+const origin = () => originOf(parseWebUrl(server.stdout()));
+for (let i = 0; i < 90; i++) {
+  try { const r = await fetch(origin() + '/'); if (r.status === 200) { ready = true; break; } } catch {}
+  if (!server.alive()) break;
   await new Promise(r2 => setTimeout(r2, 1000));
 }
-ok(ready && exitCode === null, '[C] web 服务就绪且宿主存活');
+ok(ready && server.alive(), '[C] web 服务就绪且宿主存活');
 let html1 = '';
-try { html1 = await (await fetch('http://127.0.0.1:' + PORT + '/')).text(); } catch {}
+try { html1 = await (await fetch(origin() + '/')).text(); } catch {}
 ok(html1.includes('// dsh-error-tell 注入脚本'), '[C] 注入脚本存在');
 ok(html1.includes('fixture-bad-client'), '[C] __DSH_BOOT__ 含坏 client 行');
-const dis = await fetch('http://127.0.0.1:' + PORT + '/api/error-tell/disable', {
+const dis = await fetch(origin() + '/api/error-tell/disable', {
   method: 'POST', headers: { 'content-type': 'application/json', 'x-dsh-error-tell': '1', 'x-dsh-error-token': 'test-token' },
   body: JSON.stringify({ rowId: '@dsh-error-tell/fixture-bad-client' })
 }).then(r => r.json()).catch(e => ({ error: e.message }));
@@ -75,13 +63,13 @@ ok(dis.ok === true, '[C] 禁用端点 ok');
 let html2 = '';
 for (let i = 0; i < 10; i++) {
   await new Promise(r2 => setTimeout(r2, 1000));
-  try { html2 = await (await fetch('http://127.0.0.1:' + PORT + '/')).text(); } catch {}
+  try { html2 = await (await fetch(origin() + '/')).text(); } catch {}
   if (!html2.includes('fixture-bad-client')) break;
 }
 ok(!html2.includes('fixture-bad-client'), '[C] 禁用后组合图排除坏行');
 const patchC = readFileSync(join(homeC, 'cordis.patch.yml'), 'utf8');
 ok(patchC.includes('- id: fixture-bad-client') && patchC.includes('disabled: true'), '[C] home patch 已禁用');
-try { execFileSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { server.kill(); }
+server.stop();
 
 // ===== Phase D ===== 
 const homeD = join(tmp, 'homeD');

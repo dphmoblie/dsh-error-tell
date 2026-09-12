@@ -40,42 +40,98 @@ function checkImport(name, cwdList, timeoutMs) {
   });
 }
 
+/** 限流并发执行（保持调用方拿到全部结果，不保证完成顺序）。 */
+async function mapLimit(items, limit, fn) {
+  const width = Math.min(Math.max(1, Number(limit) || 1), items.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: width }, async () => {
+    while (cursor < items.length) {
+      const item = items[cursor++];
+      await fn(item);
+    }
+  }));
+}
+
 /**
- * 对行清单做静态检查 + import 干跑。
- * @returns issues: { severity: "error"|"warn"|"info", stage, rowId, package?, message }
+ * import 干跑结果缓存：同一包名（相同 profileDir/dshInstall）只跑一次。
+ * 注意这是进程级缓存，长驻进程应在每次守护开始前 clearImportCache()，避免结果发霉。
  */
-// M8：进程内去重——同一包名（相同 profileDir/dshInstall）只做一次 import 干跑
 const importCache = new Map();
 
-export async function runChecks(rows, { profileDir, dshInstall, timeoutMs = 20000, skipPackages = [], importChecks = true } = {}) {
-  const issues = [];
+/** 清空 import 干跑缓存（长驻进程/测试用）。 */
+export function clearImportCache() {
+  importCache.clear();
+}
+
+/**
+ * 对行清单做静态检查 + import 干跑。
+ *
+ * 性能（M8）：import 干跑是子进程，单个包的耗时 ≈ 启动 + 真实加载，坏包还要等满 timeout。
+ * 原实现逐行串行 await，N 个包的最坏耗时是 Σtimeout；这里改为「唯一包并行、限流 concurrency」，
+ * 最坏耗时降到 ≈ ⌈N/concurrency⌉ × timeout，同时用 plan 回放保证 issues 顺序与串行实现一致。
+ *
+ * @returns issues: { severity: "error"|"warn"|"info", stage, rowId, package?, message }
+ */
+export async function runChecks(rows, {
+  profileDir, dshInstall, timeoutMs = 20000, skipPackages = [],
+  importChecks = true, concurrency = 4, runner = checkImport
+} = {}) {
   const seen = new Set();
+  const cwds = [profileDir, dshInstall].filter(Boolean);
+  const plan = [];        // 按原行顺序记录「该行产出什么」
+  const pendingKeys = []; // 唯一 cacheKey（首次出现顺序）
+  const jobs = new Map(); // cacheKey -> 惰性启动函数（必须惰性，否则限流失效）
+
+  // 第一阶段：静态检查（同步），并把需要 import 干跑的行登记进 plan
   for (const row of rows) {
     if (!row || typeof row !== 'object' || !row.id) {
-      issues.push({ severity: 'warn', stage: 'config', rowId: String(row?.id ?? '?'), message: '行缺少 id（配置问题，跳过禁用路径）' });
+      plan.push({ type: 'issue', issue: { severity: 'warn', stage: 'config', rowId: String(row?.id ?? '?'), message: '行缺少 id（配置问题，跳过禁用路径）' } });
       continue;
     }
-    if (seen.has(row.id)) issues.push({ severity: 'error', stage: 'config', rowId: row.id, message: '重复的行 id' });
+    if (seen.has(row.id)) plan.push({ type: 'issue', issue: { severity: 'error', stage: 'config', rowId: row.id, message: '重复的行 id' } });
     seen.add(row.id);
     if (row.disabled) continue;
     if (!row.name) {
-      issues.push({ severity: 'error', stage: 'config', rowId: row.id, message: '启用的行缺少 name' });
+      plan.push({ type: 'issue', issue: { severity: 'error', stage: 'config', rowId: row.id, message: '启用的行缺少 name' } });
       continue;
     }
-    if (skipPackages.includes(row.name)) continue;
-    if (!importChecks) continue;
+    if (skipPackages.includes(row.name) || !importChecks) continue;
     const probe = probePackage(row.name, { profileDir, dshInstall });
     if (probe?.clientOnly) {
-      issues.push({ severity: 'info', stage: 'probe', rowId: row.id, message: 'client-only 包 ' + row.name + '，跳过 import 干跑（浏览器侧，见 client-tell）' });
+      plan.push({ type: 'issue', issue: { severity: 'info', stage: 'probe', rowId: row.id, message: 'client-only 包 ' + row.name + '，跳过 import 干跑（浏览器侧，见 client-tell）' } });
       continue;
     }
     const cacheKey = row.name + '@' + (profileDir || '') + '@' + (dshInstall || '');
-    let r = importCache.get(cacheKey);
-    if (!r) {
-      r = await checkImport(row.name, [profileDir, dshInstall].filter(Boolean), timeoutMs);
-      importCache.set(cacheKey, r);
+    plan.push({ type: 'import', cacheKey, name: row.name, rowId: row.id });
+    if (!jobs.has(cacheKey)) {
+      pendingKeys.push(cacheKey);
+      const hit = importCache.get(cacheKey);
+      jobs.set(cacheKey, hit
+        ? async () => hit
+        : async () => {
+          try {
+            const res = await runner(row.name, cwds, timeoutMs);
+            importCache.set(cacheKey, res);
+            return res;
+          } catch (e) {
+            const res = { ok: false, stage: 'spawn', error: String(e?.message ?? e) };
+            importCache.set(cacheKey, res);
+            return res;
+          }
+        });
     }
-    if (!r.ok) issues.push({ severity: 'error', stage: r.stage, rowId: row.id, package: row.name, message: r.error });
+  }
+
+  // 第二阶段：唯一包并行干跑（限流）。jobs 是惰性的，因此同一时刻最多 concurrency 个子进程
+  const resolved = new Map();
+  await mapLimit(pendingKeys, concurrency, async (k) => { resolved.set(k, await jobs.get(k)()); });
+
+  // 第三阶段：按原行顺序回放，产出与串行实现一致的 issues 顺序
+  const issues = [];
+  for (const step of plan) {
+    if (step.type === 'issue') { issues.push(step.issue); continue; }
+    const r = resolved.get(step.cacheKey);
+    if (r && !r.ok) issues.push({ severity: 'error', stage: r.stage, rowId: step.rowId, package: step.name, message: r.error });
   }
   return issues;
 }

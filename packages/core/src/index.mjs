@@ -186,6 +186,27 @@ export function countManaged(patchPath) {
   return readManaged(patchPath).ids.size;
 }
 
+/**
+ * 本次进程自动禁用的行（patchPath → Set<rowId>）。
+ *
+ * 熔断必须按「本次运行新增禁用了多少行」计数，而不是 managed 段的历史总量：
+ * 后者会让已存在 maxDisable 个合法禁用行的用户永久自锁——此后任何新坏插件
+ * 都无法被自动禁用，守护形同失效（S3）。boot-guard 的 assertDisableLimit
+ * 本来就是按本次增量判定，这里与它对齐。
+ */
+const runDisabled = new Map();
+function runDisabledFor(patchPath) {
+  let s = runDisabled.get(patchPath);
+  if (!s) { s = new Set(); runDisabled.set(patchPath, s); }
+  return s;
+}
+
+/** 重置本次运行的禁用计数（测试用；不传参数则全部重置）。 */
+export function resetRunDisabled(patchPath) {
+  if (patchPath === undefined) runDisabled.clear();
+  else runDisabled.delete(patchPath);
+}
+
 /** 同步把 rowId 加入 managed 禁用段（幂等）。 */
 export function syncDisable(patchPath, rowId) {
   const managed = readManaged(patchPath);
@@ -240,7 +261,8 @@ export function batchThreshold() {
   return Number(process.env.DSH_ERROR_TELL_BATCH_THRESHOLD || 5);
 }
 /**
- * 记录一次失败：账本必写（可审计）；managed 禁用数达到 maxDisable 时熔断（跳过写 managed，返回 false）。
+ * 记录一次失败：账本必写（可审计）；本次运行新增禁用行数达到 maxDisable 时熔断
+ * （跳过写 managed，返回 false）。注意计数是「本次运行增量」而非 managed 历史总量。
  */
 export function recordFailure(home, patchPath, { rowId, pkg, stage, error, source = 'runtime-guard', maxDisable = 5, batchCount = 1, log = () => {} }) {
   if (!rowId) return false;
@@ -261,12 +283,15 @@ export function recordFailure(home, patchPath, { rowId, pkg, stage, error, sourc
     addQuarantine(home, { rowId, package: pkg, stage, error: String(error).split('\n')[0] + '（保护名单未禁用）', source: source + '-protected' });
     return false;
   }
-  if (countManaged(patchPath) >= maxDisable) {
-    log('[dsh-error-tell] 熔断：managed 禁用数已达上限 ' + maxDisable + '，拒绝禁用 ' + rowId + '（账本已记录）');
+  // 熔断：按本次运行新增量判定（而非 managed 历史总量），避免永久自锁
+  const ran = runDisabledFor(patchPath);
+  if (!ran.has(rowId) && ran.size >= maxDisable) {
+    log('[dsh-error-tell] 熔断：本次运行已自动禁用 ' + ran.size + ' 行（上限 ' + maxDisable + '），拒绝禁用 ' + rowId + '（账本已记录）');
     addQuarantine(home, { rowId, package: pkg, stage, error: String(error).split('\n')[0] + '（熔断未禁用）', source: source + '-fuse' });
     return false;
   }
   addQuarantine(home, { rowId, package: pkg, stage, error: String(error).split('\n')[0], source });
   syncDisable(patchPath, rowId);
+  ran.add(rowId);
   return true;
 }

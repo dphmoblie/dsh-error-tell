@@ -14,12 +14,25 @@ export const inject = ['webServer'];
 const SELF = 'error-tell-client-host';
 const GUARD_HEADER = 'x-dsh-error-tell';
 
+const MAX_BODY = 65536;
+
+/**
+ * 读取请求体，返回 { raw, tooLarge }。
+ * 原实现在超限时只 `req.destroy()`：destroy 并不保证触发 end/error，
+ * promise 可能永不 resolve → 端点挂死、连接与内存泄漏。这里用 close 兜底。
+ */
 function readBody(req) {
   return new Promise((resolve) => {
     let data = '';
-    req.on('data', (d) => { data += d; if (data.length > 65536) req.destroy(); });
-    req.on('end', () => resolve(data));
-    req.on('error', () => resolve(''));
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    req.on('data', (d) => {
+      data += d;
+      if (data.length > MAX_BODY) { done({ raw: '', tooLarge: true }); req.destroy(); }
+    });
+    req.on('end', () => done({ raw: data, tooLarge: false }));
+    req.on('error', () => done({ raw: '', tooLarge: false }));
+    req.on('close', () => done({ raw: '', tooLarge: true })); // destroy 后兜底，避免永久挂起
   });
 }
 
@@ -70,6 +83,7 @@ export function apply(ctx) {
   // M3：per-page 随机 token，注入脚本携带，端点校验（跨域页面无法读取）
   const token = process.env.DSH_ERROR_TELL_TOKEN || randomBytes(16).toString('hex');
   const maxDisable = Number(process.env.DSH_ERROR_TELL_MAX_DISABLE || 5);
+  const manualDisabled = new Set(); // 本次会话手动禁用的行（熔断按增量计数，避免历史自锁）
 
   // 插件元数据解析（package.json description → 面板历史记录展示「这个插件是干什么的」）
   // 解析锚点：loader baseUrl（profile 目录）→ 进程 cwd → ~/.dsh/profiles 下各 profile 目录
@@ -119,7 +133,8 @@ export function apply(ctx) {
     handler: async (req, res) => {
       if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method not allowed' });
       if (!guardHeader(req)) return json(res, 403, { ok: false, error: 'missing guard header' });
-      const raw = await readBody(req);
+      const { raw, tooLarge } = await readBody(req);
+      if (tooLarge) return json(res, 413, { ok: false, error: 'request body too large' });
       let rowId;
       try { rowId = JSON.parse(raw || '{}').rowId; } catch { return json(res, 400, { ok: false, error: 'bad json' }); }
       if (!rowId || typeof rowId !== 'string') return json(res, 400, { ok: false, error: 'rowId required' });
@@ -127,14 +142,19 @@ export function apply(ctx) {
       if (!found) return json(res, 404, { ok: false, error: 'row not found: ' + rowId });
       if (found === SELF || String(found).startsWith('error-tell-')) return json(res, 403, { ok: false, error: 'refusing to disable self/guard row' });
       if (isProtected(found, rowId)) return json(res, 403, { ok: false, error: 'refusing to disable protected core service: ' + found });
+      const preManaged = readManaged(patchPath);
+      const alreadyDisabled = preManaged.ids.has(found);
+      // 熔断按「本次会话手动新增」计数，而不是 managed 历史总量：
+      // 否则用户已有 maxDisable 个禁用行时，面板上再也禁不掉新的坏插件（自锁）。
+      if (!alreadyDisabled && manualDisabled.size >= maxDisable) {
+        return json(res, 429, { ok: false, error: 'disable limit reached this session (' + maxDisable + ')' });
+      }
       try {
+        preManaged.ids.add(found);
+        writeManaged(patchPath, preManaged.ids);
+        if (!alreadyDisabled) manualDisabled.add(found);
+        // 账本只在真正写入 managed 之后才记（原实现先记账再判上限，会留下「记录了但没禁用」的假条目）
         addQuarantine(home, { rowId: found, package: rowId, stage: 'client', error: 'browser 手动禁用（client-tell）', source: 'client-tell' });
-        const managed = readManaged(patchPath);
-        if (managed.ids.size >= maxDisable) {
-          return json(res, 429, { ok: false, error: 'disabled count limit reached (' + maxDisable + ')' });
-        }
-        managed.ids.add(found);
-        writeManaged(patchPath, managed.ids);
       } catch (e) {
         return json(res, 500, { ok: false, error: String(e && e.message || e) });
       }
@@ -149,12 +169,14 @@ export function apply(ctx) {
     handler: async (req, res) => {
       if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method not allowed' });
       if (!guardHeader(req)) return json(res, 403, { ok: false, error: 'missing guard header' });
-      const raw = await readBody(req);
+      const { raw, tooLarge } = await readBody(req);
+      if (tooLarge) return json(res, 413, { ok: false, error: 'request body too large' });
       let rowId;
       try { rowId = JSON.parse(raw || '{}').rowId; } catch { return json(res, 400, { ok: false, error: 'bad json' }); }
       if (!rowId || typeof rowId !== 'string') return json(res, 400, { ok: false, error: 'rowId required' });
       try {
         const hit = restoreQuarantine(home, rowId);
+        manualDisabled.delete(rowId);
         const managed = readManaged(patchPath);
         const removed = managed.ids.delete(rowId);
         writeManaged(patchPath, managed.ids);
