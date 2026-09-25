@@ -116,7 +116,7 @@
 
 | 状态 | 内容 |
 |---|---|
-| **已实测验证** | 单测 **101/101**（`pnpm test`，不涉及端口）；**`pnpm e2e:d`（Phase D）13/13 全绿，本机 262.9 s**，且同一提交在 CI（run 36142990930）上 Phase C/D 均通过——它用的 profile `s2test` 只含 `@deepseek-ai/dsh-base`、不起 `dsh web`，故不受本地禁端口约束；另有**不开端口的 Phase E/G 复刻**（`.tmp/verify-e-noport.mjs`：`rows=93 issues=0 errors=0`、无 home patch、**无隔离账本**；`.tmp/verify-g-noport.mjs`：`attempts=3`、两个坏行都进 managed、账本 failCount=2）；runtime-guard 的 import 归因修复（真实 dsh 0.1.5-alpha.1 全程跑通，账本从误报 `include` 变为正确归因 `fixture-bad-import`）；`dshInstall` 修复（`timer` 从"模块无法解析"变为无误报）；`quoteArg` 往返 6/6；web URL 解析、参数安全、**超时无孤儿进程**（见下） |
+| **已实测验证** | 单测 **103/103**（`pnpm test`，不涉及端口；含新增 `compose-timeout.test.mjs` 2 条，把 Phase H 依赖的「进程级超时 → `timedOut:true`」兜底分支固定在单测里，不再依赖 dsh 版本的挂起行为）；**`pnpm e2e:d`（Phase D）13/13 全绿，本机 262.9 s**，且同一提交在 CI 上 Phase C/D 均通过——它用的 profile `s2test` 只含 `@deepseek-ai/dsh-base`、不起 `dsh web`，故不受本地禁端口约束；另有**不开端口的 Phase E/G/H 复刻**（`.tmp/verify-e-noport.mjs`：`rows=93 issues=0 errors=0`、无 home patch、**无隔离账本**；`.tmp/verify-g-noport.mjs`：`attempts=3`、两个坏行都进 managed、账本 failCount=2；`.tmp/verify-h-noport.mjs`：`exit=5`、`spawn={code:null,timedOut:true}`、无 home patch、无隔离账本）；runtime-guard 的 import 归因修复（真实 dsh 0.1.5-alpha.1 全程跑通，账本从误报 `include` 变为正确归因 `fixture-bad-import`）；`dshInstall` 修复（`timer` 从"模块无法解析"变为无误报）；`quoteArg` 往返 6/6；web URL 解析、参数安全、**超时无孤儿进程**（见下） |
 | **已改但本地未验证** | 需要在 `dsh web` 上跑端到端断言的其余脚本（`pnpm e2e:c` / `e2e:efg` / `e2e:s3c` / `e2e:h`，均须绑定临时端口）；Phase D 在**旧 dsh**（0.1.0-rc.6，import 失败会终止进程）路径下也未复跑过 |
 
 ### 本轮：dsh 0.1.7-rc.2 适配（CI 从红转绿）

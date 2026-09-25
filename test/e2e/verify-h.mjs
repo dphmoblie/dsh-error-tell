@@ -51,6 +51,14 @@ ok(true, '[H] 沙箱依赖已链接（junction）');
 // 预检超时还会重试一次（+最多 20 s），90 s 余量偏紧。
 const gH = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1', '--timeout-ms', '20000'], { env: envH, timeoutMs: 180000 });
 const jH = parseLastJson(gH.stdout);
+// CI 上这条断言挂过一次，而日志里看不到 guard 的 JSON（本脚本只在 web 未就绪时 dump）——
+// 断言文案只能证明 exit=5，无法区分「jH 没解析出来 / ok 不是 false / timedOut 不是 true」。
+// 下面把原始证据直接打出来：spawn 是 {code:null, timedOut:true}（进程级超时赢）还是
+// {code:<非0>, timedOut:false}（dsh 自己先退了）——两者的修法完全不同。
+console.error('---- [H] guard 结果 ----');
+console.error('parsed=' + (jH ? 'yes' : 'no') + ' exit=' + String(gH.code) + ' ok=' + String(jH && jH.ok) + ' spawn=' + JSON.stringify(jH && jH.spawn));
+console.error('--- guard stdout 末尾 ---\n' + String(gH.stdout || '').split(/\r?\n/).filter(l => l.trim()).slice(-14).join('\n'));
+console.error('--- guard stderr 末尾 ---\n' + String(gH.stderr || '').split(/\r?\n/).filter(l => l.trim()).slice(-14).join('\n'));
 ok(gH.code === 5 && jH && jH.ok === false && jH.spawn?.timedOut === true, '[H] 挂起超时熔断（exit 5, timedOut）—— exit=' + gH.code);
 const homePatch = existsSync(join(home, 'cordis.patch.yml'));
 const stateDir = existsSync(join(home, 'state', 'dsh-error-tell'));
