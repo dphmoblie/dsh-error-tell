@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { linkProfile } from './link-profile.mjs';
 // P1：统一辅助模块——参数转义/超时杀进程树/POSIX 进程组都只有一份实现
-import { dumpServer, originOf, parseWebUrl, run, startServer } from './helpers.mjs';
+import { dumpServer, startServer, waitForWebReady } from './helpers.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -43,27 +43,8 @@ const envC = { ...process.env, DSH_HOME: homeC, DSH_TELEMETRY_DISABLED: '1' };
 // dsh 打印的 `dsh web: <url>?token=` 里就是实际绑定端口（web-app 用 ctx.get("webServer").port），
 // 所以 `--port 0` 足够，从 stdout 取端口即可。
 const server = startServer('dsh', ['--profile', 'web', '--port', '0', '--no-open'], { env: { ...envC, DSH_ERROR_TELL_TOKEN: 'test-token' } });
-let ready = false;
-const webUrlOf = () => parseWebUrl(server.stdout());
-const origin = () => originOf(webUrlOf());
-// 新版会话认证：带 token 的首页 303 → Set-Cookie → 干净路径带 cookie 访问
-let sessionCookie = '';
-async function pageFetch() {
-  const base = origin();
-  if (!base) throw new Error('dsh 尚未打印 web URL');
-  const first = await fetch(webUrlOf(), { redirect: 'manual', headers: sessionCookie ? { cookie: sessionCookie } : {} });
-  if (first.status === 303) {
-    const sc = first.headers.get('set-cookie');
-    if (sc) sessionCookie = sc.split(';')[0];
-    return fetch(base + '/', { headers: sessionCookie ? { cookie: sessionCookie } : {} });
-  }
-  return first;
-}
-for (let i = 0; i < 90; i++) {
-  try { const r = await pageFetch(); if (r.status === 200) { ready = true; break; } } catch {}
-  if (!server.alive()) break;
-  await new Promise(r2 => setTimeout(r2, 1000));
-}
+// 就绪判据与 S3C 共用 helpers.mjs 的 waitForWebReady（带 token 的首页 303 → Set-Cookie → 再用 cookie 访问）
+const { ready, pageFetch, webUrl: webUrlOf, origin } = await waitForWebReady(server);
 if (!(ready && server.alive())) dumpServer(server, 'dsh（Phase C）');
 ok(ready && server.alive(), '[C] web 服务就绪且宿主存活' + (webUrlOf() ? '（已换会话 cookie）' : ''));
 let html1 = '';

@@ -116,3 +116,44 @@ export async function waitFor(cond, { tries = 90, delayMs = 1000 } = {}) {
   }
   return false;
 }
+
+/**
+ * 带会话认证的首页抓取器（dsh 0.1.x）。
+ *
+ * 契约（`dsh web: http://127.0.0.1:PORT/?token=XXX`）：**裸访问 origin + '/' 拿不到 200**，
+ * 必须先用带 token 的 URL 请求首页 → 303 → 从 Set-Cookie 取会话 cookie → 之后用 cookie 访问干净路径。
+ * CI 上 Phase S3C 正是用裸 `origin() + '/'` 探测，dsh 已打印 URL、宿主也活着，却整整 90 秒都拿不到 200
+ * 而假失败（同一 origin 的 /api/error-tell/disable 反而 200/429 全对）。
+ */
+export function makePageFetch(server) {
+  const webUrl = () => parseWebUrl(server.stdout());
+  const origin = () => originOf(webUrl());
+  let sessionCookie = '';
+  async function pageFetch() {
+    const base = origin();
+    if (!base) throw new Error('dsh 尚未打印 web URL');
+    const first = await fetch(webUrl(), { redirect: 'manual', headers: sessionCookie ? { cookie: sessionCookie } : {} });
+    if (first.status === 303) {
+      const sc = first.headers.get('set-cookie');
+      if (sc) sessionCookie = sc.split(';')[0];
+      return fetch(base + '/', { headers: sessionCookie ? { cookie: sessionCookie } : {} });
+    }
+    return first;
+  }
+  return { pageFetch, webUrl, origin, cookie: () => sessionCookie };
+}
+
+/**
+ * 等 dsh web 就绪（首页真的返回 200）并把同一套 pageFetch/origin 交给调用方复用。
+ * @returns {Promise<{ready:boolean, pageFetch:Function, webUrl:Function, origin:Function, cookie:Function}>}
+ */
+export async function waitForWebReady(server, { tries = 90, delayMs = 1000 } = {}) {
+  const api = makePageFetch(server);
+  let ready = false;
+  for (let i = 0; i < tries; i++) {
+    try { const r = await api.pageFetch(); if (r && r.status === 200) { ready = true; break; } } catch { /* 未就绪 */ }
+    if (!server.alive()) break;
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  return { ready, ...api };
+}

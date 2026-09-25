@@ -177,6 +177,14 @@
    → `checkImport()` 同一锚点**重试一次**，两次都超时才上报（错误文案写明「重试 1 次后仍超时」）；
    被放弃的旧进程标记 `abandoned`，其 exit/error 事件不再进入判定。回归测试 +1 条（marker 控制「首次挂起、重试成功」）。
 
+6. **S3C 的就绪探测用裸 `origin + '/'`，在会话认证下永远拿不到 200**（CI run 36145730009 首次真正跑到该步骤）：
+   诊断输出里 dsh 已打印 `dsh web: http://127.0.0.1:63053/?token=YkXl…`、`exitCode: null`（宿主活着）、stderr 为空，
+   却整整 90 秒探测不到 200，而同一 origin 的 `/api/error-tell/disable` 返回 200、第二次 429（熔断逻辑本身全对）。
+   根因：dsh 0.1.x 的首页要**会话认证**——带 token 的首页先 303 → `Set-Cookie` → 再用 cookie 访问；
+   Phase C 一直是这么做的（断言文案里的「已换会话 cookie」），S3C 抄了旧写法。
+   → 把该逻辑抽到 `test/e2e/helpers.mjs` 的 `makePageFetch(server)` / `waitForWebReady(server)`，
+   `verify-c.mjs` 与 `verify-s3c.mjs` 共用（顺带消化 P1-b 类重复实现）；`run` 不再使用，两个脚本的 import 一并收敛。
+
 时间预算：0.1.7-rc.2 下 D1/D2 的失败不再"秒退"，只能等守卫自己的超时窗口，故 `test/e2e/verify-d.mjs`
 把 D1/D2 的 `--timeout-ms` 从 90 s 降到 **30 s**、D3 的 quit 窗口从 90 s 降到 **60 s**（dry-run 的超时上限放到 240 s，
 本机实测该步骤 73 s：94 行逐行 import 干跑、并发 4）。整套 Phase D 由 444.7 s 降到 262.9 s。

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { linkProfile } from './link-profile.mjs';
 // P1：统一辅助模块——参数转义/超时杀进程树/POSIX 进程组都只有一份实现
-import { dumpServer, originOf, parseWebUrl, run, startServer } from './helpers.mjs';
+import { dumpServer, startServer, waitForWebReady } from './helpers.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const tmp = mkdtempSync(join((await import('node:os')).tmpdir(), 'det-s3c-'));
@@ -44,13 +44,10 @@ ok(true, '[S3C] 沙箱依赖已链接（junction）');
 // M5：不预先探测端口（原「探针→关闭→再绑定」有 TOCTOU 竞态）；从 dsh 打印的 URL 取实际端口
 const env = { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1', DSH_ERROR_TELL_TOKEN: 'test-token', DSH_ERROR_TELL_MAX_DISABLE: '1' };
 const server = startServer('dsh', ['--profile', 'web', '--port', '0'], { env });
-const origin = () => originOf(parseWebUrl(server.stdout()));
-let ready = false;
-for (let i = 0; i < 90; i++) {
-  try { const r = await fetch(origin() + '/'); if (r.status === 200) { ready = true; break; } } catch {}
-  if (!server.alive()) break;
-  await new Promise(r2 => setTimeout(r2, 1000));
-}
+// 就绪判据与 Phase C 共用：dsh 0.1.x 是会话认证，**裸访问 origin + '/' 永远拿不到 200**
+// （CI 实测：dsh 已打印 `dsh web: http://127.0.0.1:63053/?token=…`、宿主也活着，
+//  裸探测 90 秒全失败，而同 origin 的 /api/error-tell/* 全对 → 纯属探测写法错）。
+const { ready, origin } = await waitForWebReady(server);
 if (!(ready && server.alive())) dumpServer(server, 'dsh（Phase S3C）');
 ok(ready && server.alive(), '[S3C] web 服务就绪且宿主存活');
 
