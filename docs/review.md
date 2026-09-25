@@ -181,6 +181,11 @@
 把 D1/D2 的 `--timeout-ms` 从 90 s 降到 **30 s**、D3 的 quit 窗口从 90 s 降到 **60 s**（dry-run 的超时上限放到 240 s，
 本机实测该步骤 73 s：94 行逐行 import 干跑、并发 4）。整套 Phase D 由 444.7 s 降到 262.9 s。
 
+Phase E/F/G 与 H 的**用例上限（不是被测行为）**同步放宽，因为「逐行 import 干跑」预检在 CI 上约 25–30 s，
+且修好「归因禁用后必须重启交付」后 Phase G 由 2 次启动变成 3 次启动（CI 实测 2 次启动段 87 s ⇒ 3 次约 130 s+）：
+`verify-efg.mjs` E `60000 → 120000`、G `120000 → 300000`；`verify-h.mjs` `90000 → 180000`。
+不这么改，CI 会在第 3 次启动中途按用例上限杀掉 guard（没有最终 JSON ⇒ `attempts=undefined` 的假失败）。
+
 ### 第二轮评审（P1/P2）修复
 
 - **P1-a（属实）`runDsh()` 缺 `detached`**：`compose.mjs` 用 `shell: true` 启动却没建进程组，

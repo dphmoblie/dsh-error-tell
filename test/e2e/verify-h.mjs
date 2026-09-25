@@ -47,7 +47,9 @@ const envH = { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' };
 linkProfile(profileH, { '@dsh-error-tell/fixture-bad-hang': 'packages/test-fixtures/bad-hang' });
 ok(true, '[H] 沙箱依赖已链接（junction）');
 
-const gH = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1', '--timeout-ms', '20000'], { env: envH, timeoutMs: 90000 });
+// 上限 180 s：guard 自己的 20 s 熔断窗口只占小头，「逐行 import 干跑」预检（93 行、并发 4）在 CI 上约 25~30 s，
+// 预检超时还会重试一次（+最多 20 s），90 s 余量偏紧。
+const gH = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1', '--timeout-ms', '20000'], { env: envH, timeoutMs: 180000 });
 const jH = parseLastJson(gH.stdout);
 ok(gH.code === 5 && jH && jH.ok === false && jH.spawn?.timedOut === true, '[H] 挂起超时熔断（exit 5, timedOut）—— exit=' + gH.code);
 const homePatch = existsSync(join(home, 'cordis.patch.yml'));

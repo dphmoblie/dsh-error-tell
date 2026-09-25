@@ -30,7 +30,9 @@ const profileE = join(homeE, 'profiles', 'web');
 const envE = { ...process.env, DSH_HOME: homeE, DSH_TELEMETRY_DISABLED: '1' };
 linkProfile(join(homeE, 'profiles', 'web'), {}); // 无 file: 依赖也要链接（DET_DSH_PREFIX 时含官方包 junction）
 ok(true, '[E] 无依赖沙箱（已链接官方包）');
-const gE = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envE, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 60000 });
+// 上限 120 s：CI 实测该步骤约 25~30 s，其中「逐行 import 干跑」占大头（93 行、并发 4），
+// 预检超时还会重试一次（+最多 20 s），故留足余量避免把慢误判成挂死。
+const gE = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1'], { env: { ...envE, DSH_ERROR_TELL_QUIT_AFTER_MS: '15000' }, timeoutMs: 120000 });
 const jE = JSON.parse((gE.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 ok(jE.ok === true && jE.attempts === 1 && jE.disabled.length === 0, '[E] 干净 profile 一次启动成功，未禁用任何行（attempts=' + jE.attempts + '）');
 ok(!existsSync(join(homeE, 'cordis.patch.yml')), '[E] 未创建 home patch（零副作用）');
@@ -58,7 +60,10 @@ linkProfile(join(homeG, 'profiles', 'web'), {
   '@dsh-error-tell/fixture-bad-apply': 'packages/test-fixtures/bad-apply'
 });
 ok(true, '[G] 沙箱依赖已链接（junction）');
-const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '2'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 120000 });
+// 上限 300 s：CI 实测「2 次启动」段为 87 s（13:54:57→13:56:25），修好「归因禁用后必须重启交付」后
+// 变成 3 次启动（每次都要跑满 quit 窗口 60 s）⇒ 线性外推 ≈ 130 s+，旧的 120 s 上限会在第 3 次启动中途
+// 把 guard 杀掉（kill 后没有最终 JSON，断言会得到 attempts=undefined 的假失败）。
+const gG = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '2'], { env: { ...envG, DSH_ERROR_TELL_QUIT_AFTER_MS: '60000' }, timeoutMs: 300000 });
 const jG = JSON.parse((gG.stdout.match(/\{[\s\S]*\}/) || ['{}'])[0]);
 // S2 语义：import 坏行预检命中，apply 坏行第 1 次启动才暴露（观察中），第 2 次重启后禁用，第 3 次启动成功
 ok(jG.ok === true && jG.attempts >= 3, '[G] 多坏插件最终正常启动（attempts=' + jG.attempts + '）');
