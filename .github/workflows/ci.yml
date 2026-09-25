@@ -26,8 +26,18 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # 不要把 dsh 钉回 0.1.0-rc.6：上游在 2026-09-22 锁步发布了 cordis 4.0.4 /
+      # cordis-plugin-hmr 1.0.19 等，旧 dsh 动态装载 HMR 服务失败后会抛
+      # "user patch-layer watching requires the Cordis HMR service" 并 exit 1，
+      # 任何 profile 都起不来（npm i -g 没有 lockfile，钉不住 ^1.0.16 这类传递依赖）。
       - name: 安装 dsh CLI（e2e 依赖）
-        run: npm i -g @deepseek-ai/dsh@0.1.0-rc.6
+        run: npm i -g @deepseek-ai/dsh@0.1.7-rc.2
+      - name: 记录 dsh 与 cordis 依赖版本（上游漂移诊断）
+        shell: pwsh
+        run: |
+          dsh --version
+          $dshRoot = Join-Path (npm root -g).Trim() '@deepseek-ai\dsh'
+          node -e "const r=require.resolve;const dshRoot=process.argv[1];for(const p of process.argv.slice(2)){try{console.log(p+' = '+require(r(p+'/package.json',{paths:[dshRoot]})).version)}catch(e){console.log(p+' = (未解析到)')}}" $dshRoot '@deepseek-ai/dsh-app-boot' '@deepseek-ai/cordis' '@deepseek-ai/cordis-plugin-hmr' '@deepseek-ai/cordis-plugin-loader' '@deepseek-ai/cordis-plugin-timer'
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
       - name: 单元测试
@@ -76,7 +86,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: 安装 dsh CLI（e2e 依赖）
-        run: npm i -g @deepseek-ai/dsh@0.1.0-rc.6
+        run: npm i -g @deepseek-ai/dsh@0.1.7-rc.2   # 与实机一致；上游漂移原因见 fast 作业里的注释
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
       - name: 全链路 e2e
