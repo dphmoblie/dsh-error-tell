@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { linkProfile } from './link-profile.mjs';
 // P1：统一辅助模块——参数转义/超时杀进程树/POSIX 进程组都只有一份实现
-import { originOf, parseWebUrl, run, startServer } from './helpers.mjs';
+import { dumpServer, originOf, parseWebUrl, run, startServer } from './helpers.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -64,6 +64,7 @@ for (let i = 0; i < 90; i++) {
   if (!server.alive()) break;
   await new Promise(r2 => setTimeout(r2, 1000));
 }
+if (!(ready && server.alive())) dumpServer(server, 'dsh（Phase C）');
 ok(ready && server.alive(), '[C] web 服务就绪且宿主存活' + (webUrlOf() ? '（已换会话 cookie）' : ''));
 let html1 = '';
 try { html1 = await (await pageFetch()).text(); } catch {}
@@ -91,11 +92,13 @@ ok(!html2.includes('fixture-bad-client'), '[C] 禁用后组合图排除坏行');
 const plC = await fetch(origin() + '/api/error-tell/plugins', { headers: { 'x-dsh-error-tell': '1', 'x-dsh-error-token': 'test-token' } }).then(r2 => r2.json()).catch(e => ({ error: e.message }));
 const recP = (plC.plugins || []).find(x => x.rowId === 'fixture-bad-client');
 ok(plC.ok === true && !!recP, '[C] /plugins 列表包含 fixture 行');
-ok(recP.disabled === true && recP.managed === true, '[C] /plugins 反映已禁用(managed)');
-ok(recP.protected === false && recP.guard === false, '[C] /plugins 普通行标记为可操作');
-ok(recP.desc && recP.desc.includes('e2e 坏插件'), '[C] /plugins 行带功能描述');
+// 注意：全部用 `!!recP &&` 兜底 —— 宿主没起来时 recP 是 undefined，
+// 原来的 `recP.disabled` 会抛 TypeError 直接终止脚本，后面的检查（/plugins 分类、patch 落盘）就全部不报了。
+ok(!!recP && recP.disabled === true && recP.managed === true, '[C] /plugins 反映已禁用(managed)');
+ok(!!recP && recP.protected === false && recP.guard === false, '[C] /plugins 普通行标记为可操作');
+ok(!!recP && recP.desc && recP.desc.includes('e2e 坏插件'), '[C] /plugins 行带功能描述');
 // 分类：fixture 行由 profile 补丁插入 → user；error-tell host 行 → third；官方包行存在 → official
-ok(recP.kind === 'third', '[C] 补丁插入行按包归属归入 third（kind=' + recP.kind + '）');
+ok(!!recP && recP.kind === 'third', '[C] 补丁插入行按包归属归入 third（kind=' + (recP && recP.kind) + '）');
 const hostRowC = (plC.plugins || []).find(x => x.rowId === 'error-tell-client-host');
 ok(hostRowC && hostRowC.kind === 'third', '[C] error-tell host 行分类为 third');
 ok((plC.plugins || []).some(x => x.kind === 'official'), '[C] 列表含官方插件行（@deepseek-ai/cordis:）');

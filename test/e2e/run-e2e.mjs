@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { linkProfile } from './link-profile.mjs';
 // P1：统一辅助模块——参数转义 / 超时杀进程树 / POSIX 进程组都只有一份实现
-import { originOf, parseWebUrl, run, startServer } from './helpers.mjs';
+import { dumpServer, originOf, parseWebUrl, run, startServer } from './helpers.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -178,6 +178,7 @@ for (let i = 0; i < 90; i++) {
   try { const r = await pageFetchC(); if (r.status === 200) { readyC = true; break; } } catch { /* 未就绪 */ }
   await new Promise(r2 => setTimeout(r2, 1000));
 }
+if (!readyC) dumpServer(serverC, 'dsh（Phase C）');
 ok(readyC, '[C] web 服务已就绪（宿主正常，坏的是浏览器侧 client bundle）');
 let html1 = '';
 try { html1 = await (await pageFetchC()).text(); } catch { /* 忽略 */ }

@@ -47,9 +47,16 @@ function probePackage(name, { profileDir, dshInstall }) {
 export function isTargetUnresolved(msg, name) {
   const s = String(msg || '');
   const n = escapeRe(name);
+  // 关键：一律要求目标包名出现在**引号内**（Node 只把「缺失的说明符」放进引号，
+  // 而 `imported from <路径>` 里的路径永远不加引号）。
+  // 原第三条写成 `ERR_MODULE_NOT_FOUND[^\n]*<name>`，在 Linux/macOS 上必然误判：
+  //   真实报错 = Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'lodash'
+  //              imported from /tmp/x/node_modules/@x/target/index.js
+  //   路径里带着目标包名 → 被判成「目标包解析不到」→ 回退到全局同名健康包 → 真损坏被掩盖。
+  // （在 Windows 上该 bug 侥幸不触发：路径用 `\`，而正则找的是 `@x/target` 这种正斜杠写法。）
   return new RegExp("Cannot find package '" + n + "'").test(s)
     || new RegExp("Cannot find module '" + n + "'").test(s)
-    || new RegExp('ERR_MODULE_NOT_FOUND[^\\n]*' + n).test(s);
+    || new RegExp("ERR_MODULE_NOT_FOUND[^\\n]*'" + n + "'").test(s);
 }
 
 /** 唯一哨兵序号：每次干跑一个，避免目标包自己打印 OK 造成假阳性（P2-11）。 */

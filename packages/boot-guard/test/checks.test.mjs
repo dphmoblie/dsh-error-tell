@@ -114,6 +114,14 @@ test('isTargetUnresolved：只有「目标包本身找不到」才算，内部�
   assert.equal(isTargetUnresolved(transitive, '@x/target'), false, '内部依赖缺失不得触发回退');
   assert.equal(isTargetUnresolved("Cannot find module '@x/target'", '@x/target'), true);
   assert.equal(isTargetUnresolved('some other error', '@x/target'), false);
+
+  // 真实 Node 报错形态（带 ERR_MODULE_NOT_FOUND 前缀 + `imported from <路径>`）：
+  // Linux/macOS 路径用正斜杠，路径段里就带着目标包名，旧正则 `ERR_MODULE_NOT_FOUND[^\n]*<name>`
+  // 会误判成「目标包解析不到」。Windows 因路径用反斜杠而侥幸通过 —— 该回归由 ubuntu CI 抓出。
+  const realTransitive = "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'definitely-missing-dep' imported from /tmp/x/node_modules/@x/target/index.js";
+  assert.equal(isTargetUnresolved(realTransitive, '@x/target'), false, '路径里的包名不得被当成缺失说明符');
+  const realTarget = "Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@x/target' imported from /tmp/x/[eval1]";
+  assert.equal(isTargetUnresolved(realTarget, '@x/target'), true, '真的缺失时仍必须回退');
 });
 
 test('checkImport：profile 内目标包存在但内部依赖缺失时不得回退到 dshInstall（P1-3 端到端回归）', async () => {

@@ -76,6 +76,19 @@ export function startServer(cmd, args, opts = {}) {
 }
 
 /**
+ * 失败诊断：打印常驻子进程的退出码与输出尾部。
+ * 没有它，e2e 失败只剩一句「web 服务未就绪」，看不到 dsh 自己吐的错因 ——
+ * 在端口被禁用的机器上无法本地复跑，只能靠 CI 日志反查，这个尾巴就是唯一的证据。
+ */
+export function dumpServer(server, label = 'server', lines = 40) {
+  const tail = (s) => String(s || '').split(/\r?\n/).filter(l => l.trim()).slice(-lines).join('\n');
+  console.error('---- ' + label + ' 诊断 ----');
+  console.error('exitCode: ' + String(server.exitCode()));
+  console.error('--- stdout 末尾 ---\n' + (tail(server.stdout()) || '(空)'));
+  console.error('--- stderr 末尾 ---\n' + (tail(server.stderr()) || '(空)'));
+}
+
+/**
  * 从 dsh stdout 解析 web URL。
  *
  * 实测形态（dsh-web-app/lib/index.js:197-203，localWebUrl 用的是 ctx.get("webServer").port）：

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { linkProfile } from './link-profile.mjs';
 // P1：统一辅助模块——参数转义/超时杀进程树/POSIX 进程组都只有一份实现
-import { originOf, parseWebUrl, run, startServer } from './helpers.mjs';
+import { dumpServer, originOf, parseWebUrl, run, startServer } from './helpers.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const tmp = mkdtempSync(join((await import('node:os')).tmpdir(), 'det-s3c-'));
@@ -51,6 +51,7 @@ for (let i = 0; i < 90; i++) {
   if (!server.alive()) break;
   await new Promise(r2 => setTimeout(r2, 1000));
 }
+if (!(ready && server.alive())) dumpServer(server, 'dsh（Phase S3C）');
 ok(ready && server.alive(), '[S3C] web 服务就绪且宿主存活');
 
 const H = { 'content-type': 'application/json', 'x-dsh-error-tell': '1', 'x-dsh-error-token': 'test-token' };

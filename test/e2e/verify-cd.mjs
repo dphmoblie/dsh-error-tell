@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { linkProfile } from './link-profile.mjs';
 // P1：统一辅助模块——参数转义/超时杀进程树/POSIX 进程组都只有一份实现
-import { originOf, parseWebUrl, run, startServer } from './helpers.mjs';
+import { dumpServer, originOf, parseWebUrl, run, startServer } from './helpers.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BIN = join(ROOT, 'packages', 'boot-guard', 'bin', 'dsh-error-tell.mjs');
@@ -50,6 +50,7 @@ for (let i = 0; i < 90; i++) {
   if (!server.alive()) break;
   await new Promise(r2 => setTimeout(r2, 1000));
 }
+if (!(ready && server.alive())) dumpServer(server, 'dsh（Phase CD）');
 ok(ready && server.alive(), '[C] web 服务就绪且宿主存活');
 let html1 = '';
 try { html1 = await (await fetch(origin() + '/')).text(); } catch {}
