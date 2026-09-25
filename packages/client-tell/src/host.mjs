@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged, isProtected, isValidRowId, nonNegativeInt } from '@dsh-error-tell/core';
+import { addQuarantine, restoreQuarantine, activeQuarantine, loadLedger, readManaged, writeManaged, isProtected, isManuallyProtected, isValidRowId, nonNegativeInt } from '@dsh-error-tell/core';
 import { INJECT_SCRIPT } from './inject-script.js';
 import { makeMetaResolver } from './meta.mjs';
 
@@ -162,7 +162,7 @@ export function apply(ctx) {
       const found = resolveRow(ctx, rowId);
       if (!found) return json(res, 404, { ok: false, error: 'row not found: ' + rowId });
       if (found === SELF || String(found).startsWith('error-tell-')) return json(res, 403, { ok: false, error: 'refusing to disable self/guard row' });
-      if (isProtected(found, rowId)) return json(res, 403, { ok: false, error: 'refusing to disable protected core service: ' + found });
+      if (isManuallyProtected(found)) return json(res, 403, { ok: false, error: 'refusing to disable protected core service: ' + found });
       const preManaged = readManaged(patchPath);
       const alreadyDisabled = preManaged.ids.has(found);
       // 熔断按「本次会话手动新增」计数，而不是 managed 历史总量：
@@ -268,7 +268,8 @@ export function apply(ctx) {
             state,
             disabled: !!e.disabled,
             managed: managed.ids.has(o.id),
-            protected: isProtected(o.id, o.name),
+            protected: isManuallyProtected(o.id),
+            autoProtected: isProtected(o.id, o.name),
             guard: o.id === SELF || String(o.id).startsWith('error-tell-'),
             kind: kindOf(o.name)
           });

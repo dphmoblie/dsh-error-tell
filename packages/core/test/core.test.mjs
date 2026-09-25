@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { writeManaged, readManaged, assertPatchParseable, isProtected, isPendingLikeError, isEnvError, recordFailure, syncDisable, loadLedger, saveLedger, addQuarantine, withFileLock, nonNegativeInt, isValidRowId, lastCorruptLedgerBackup, quarantinePath } from '../src/index.mjs';
+import { writeManaged, readManaged, assertPatchParseable, isProtected, isManuallyProtected, isPendingLikeError, isEnvError, recordFailure, syncDisable, loadLedger, saveLedger, addQuarantine, withFileLock, nonNegativeInt, isValidRowId, lastCorruptLedgerBackup, quarantinePath } from '../src/index.mjs';
 
 const _require = createRequire(import.meta.url);
 const yaml = _require('js-yaml');
@@ -75,7 +75,57 @@ test('isProtected：核心服务受保护，测试 fixture 不受保护', () => 
   assert.equal(isProtected('workspace', undefined), true);
   assert.equal(isProtected('include', undefined), true);
   assert.equal(isProtected('fixture-bad-apply', '@dsh-error-tell/fixture-bad-apply'), false);
-  assert.equal(isProtected('ui-conversation', '@deepseek-ai/dsh-client-ui-conversation'), false, 'UI 行可禁用');
+});
+
+/*
+ * 白名单加宽回归：实测本机 profile 共 231 行、PROTECTED_IDS 只覆盖 67 行，
+ * 134 行官方包（tools/agent-loop/ui-conversation/ui-chat/web/commands/skill/mcp-resources…）
+ * 此前完全裸奔。官方作用域必须整体受保护，否则一次误判就能禁用掉对话链路。
+ */
+test('isProtected：官方作用域整体受保护（含 UI/工具链行）', () => {
+  assert.equal(isProtected('ui-conversation', '@deepseek-ai/dsh-client-ui-conversation'), true, '对话 UI 行必须受保护');
+  assert.equal(isProtected('tools', '@deepseek-ai/dsh-tools'), true);
+  assert.equal(isProtected('agent-loop', '@deepseek-ai/dsh-agent-loop'), true);
+  assert.equal(isProtected('tool-bash', '@deepseek-ai/dsh-tool-bash'), true);
+  assert.equal(isProtected('web', '@deepseek-ai/dsh-web'), true);
+  assert.equal(isProtected('skill', '@deepseek-ai/dsh-skill'), true);
+  assert.equal(isProtected('commands', '@deepseek-ai/dsh-commands'), true);
+  assert.equal(isProtected('mcp-resources', '@deepseek-ai/dsh-mcp-resources'), true);
+  assert.equal(isProtected('llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai'), true);
+  // 事故清单补全项 + 结构行
+  assert.equal(isProtected('agent-teams', '@nanmicoder/dsh-agent-teams'), true);
+  assert.equal(isProtected('web-ui-remote-web-ui', '@linxin666/dsh-web-all/remote-web-ui'), true);
+  assert.equal(isProtected('planning', 'cordis:group'), true);
+  // 第三方仍可自动禁用（守卫的核心用途不受影响）
+  assert.equal(isProtected('dsh-market', 'dshmarket'), false);
+  assert.equal(isProtected('skill-hub', 'dsh-skill-hub'), false);
+});
+
+test('isProtected：哨兵自身行受保护，fixture 包不受保护', () => {
+  assert.equal(isProtected('error-tell-runtime', '@dsh-error-tell/runtime-guard'), true);
+  assert.equal(isProtected('error-tell-client-host', '@dsh-error-tell/client-tell'), true);
+  assert.equal(isProtected('x', '@dsh-error-tell/fixture-bad-import'), false, 'fixture 必须仍可被禁用');
+});
+
+test('extraProtected：环境变量可追加白名单（id / 包名 / 作用域前缀）', () => {
+  const prev = process.env.DSH_ERROR_TELL_PROTECT_EXTRA;
+  try {
+    process.env.DSH_ERROR_TELL_PROTECT_EXTRA = 'my-critical-row, @acme/, @linxin666/dsh-web-all/pet';
+    assert.equal(isProtected('my-critical-row', '@x/y'), true, '按 id 追加');
+    assert.equal(isProtected('whatever', '@acme/plugin'), true, '按作用域前缀追加');
+    assert.equal(isProtected('whatever', '@acme-plugin'), false, '前缀必须以 / 结尾才算作用域');
+    assert.equal(isProtected('web-ui-pet', '@linxin666/dsh-web-all/pet'), true, '按包名精确追加');
+  } finally {
+    if (prev === undefined) delete process.env.DSH_ERROR_TELL_PROTECT_EXTRA;
+    else process.env.DSH_ERROR_TELL_PROTECT_EXTRA = prev;
+  }
+});
+
+test('isManuallyProtected：窄名单，官方行允许人工禁用', () => {
+  assert.equal(isManuallyProtected('typert'), true);
+  assert.equal(isManuallyProtected('error-tell-runtime'), true);
+  assert.equal(isManuallyProtected('ui-conversation'), false, '官方 UI 行不在手动闸门内');
+  assert.equal(isManuallyProtected('dsh-market'), false);
 });
 
 test('recordFailure：保护名单命中只记账不写 managed；pending 错误不记录', () => {

@@ -103,7 +103,23 @@ dsh-error-tell restore <rowId>
 | `$DSH_HOME/cordis.patch.yml` | home 级补丁；`# --- dsh-error-tell managed ... ---` 段为自动管理区（请勿手改） |
 | `$DSH_HOME/state/dsh-error-tell/quarantine.json` | 隔离账本（每次禁用的审计记录） |
 
-环境变量：`DSH_HOME`（默认 `~/.dsh`）、`DSH_ERROR_TELL_QUIT_AFTER_MS`（测试钩子，正常启动后自动退出，勿在生产使用）。
+环境变量：`DSH_HOME`（默认 `~/.dsh`）、`DSH_ERROR_TELL_QUIT_AFTER_MS`（测试钩子，正常启动后自动退出，勿在生产使用）、`DSH_ERROR_TELL_ALLOW_PROTECTED=1`（紧急放行白名单）、`DSH_ERROR_TELL_BATCH_THRESHOLD`（批量失败熔断阈值，默认 5）、`DSH_ERROR_TELL_PROTECT_EXTRA`（追加保护，逗号分隔；`@scope/` 按包名前缀，其余按行 id 或包名精确匹配）。
+
+## 自动禁用白名单（防误杀）
+
+2026-08 事故：哨兵一次性禁用了 **20 个系统组件**（`api-gateway`/`session`/`workspace`/`token-meter`/`subagent`/`permission`…），结果是**页面能打开但完全无法对话**。事后加了白名单，但最初只枚举了 67 个 id；拿真实 profile 一量（231 行），**134 行官方包**（`tools`/`agent-loop`/`commands`/`skill`/`ui-chat`/`ui-conversation`/`web`/`mcp-resources`…）仍在名单之外，随时可能被误杀。现在分三层：
+
+| 层 | 范围 | 效果 |
+|---|---|---|
+| 1 | `PROTECTED_IDS`（70 条精确 id，含 2026-08 事故全清单） | 官方与少数第三方关键行，永不自动禁用 |
+| 2 | `PROTECTED_SCOPES = ['@deepseek-ai/']`（官方发行作用域） | 新增官方插件自动获得保护，不必维护名单 |
+| 3 | 哨兵自身行/包 + `cordis:` 结构行 + `DSH_ERROR_TELL_PROTECT_EXTRA` | 防自我禁用；用户可自行追加 |
+
+命中白名单的行**只写隔离账本 + 报警，绝不写 managed 禁用**。设置页的手动禁用另走窄名单（`isManuallyProtected`），官方行仍允许人工禁用。
+
+代价：官方插件若真的失败，哨兵不再自动禁用（只记账报警），需人工处理或临时设 `DSH_ERROR_TELL_ALLOW_PROTECTED=1`。第三方社区包不受影响，仍会被自动隔离——这是哨兵的主要用途。
+
+审计命令：`node scripts/audit-whitelist.mjs [loader-dump.yml]`，期望「官方包裸奔行 = 0」。
 
 ## 安全设计
 

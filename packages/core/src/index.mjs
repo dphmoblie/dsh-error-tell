@@ -323,8 +323,9 @@ export function syncDisable(patchPath, rowId) {
 }
 
 /**
- * 核心服务保护名单：这些行是 dsh 的基础服务插件，自动禁用会导致级联崩溃（2026-08 事故）。
- * 命中保护名单的失败只记账 + 报警，绝不写入 managed 禁用。
+ * 核心服务保护名单（第 1 层：精确 id）。
+ * 这些行是 dsh 的基础服务插件，自动禁用会导致级联崩溃（2026-08 事故：20 个系统组件被一次性禁用，
+ * 页面能打开但无法对话）。命中保护名单的失败只记账 + 报警，绝不写入 managed 禁用。
  * 紧急/测试可用环境变量 DSH_ERROR_TELL_ALLOW_PROTECTED=1 绕过。
  */
 export const PROTECTED_IDS = new Set([
@@ -333,19 +334,68 @@ export const PROTECTED_IDS = new Set([
   'goal', 'command-goal', 'subagent', 'subagent-spawn-in-process', 'subagent-fork-in-process',
   'subagent-control', 'subagent-report', 'workspace', 'permission', 'approval', 'settings', 'credentials',
   'storage', 'storage-json', 'storage-domain', 'webserver', 'web-runtime', 'web-startup', 'jobs',
-  'llm', 'llm-retry', 'sandbox', 'sandbox-policy', 'bash-sandbox', 'pwsh-sandbox', 'shell-env',
+  'llm', 'llm-retry', 'llm-pi-ai', 'sandbox', 'sandbox-policy', 'bash-sandbox', 'pwsh-sandbox', 'shell-env',
   'agent-presets', 'system-prompt', 'fs-observation-policy', 'session-title', 'session-title-llm',
   'message-feedback', 'token-meter', 'session-projection', 'session-persistence-jsonl', 'attachment-local',
   'session-query-sqlite', 'session-telemetry-otel', 'subprocess', 'code-runtime', 'client-hmr', 'locale',
   'ui-layout', 'plugin-inventory', 'cordis-host-runner', 'cordis-client-runner', 'session-stats',
-  'session-log-download', 'directory-picker', 'session-projection-cache', 'output-retention', 'compaction-basic'
+  'session-log-download', 'directory-picker', 'session-projection-cache', 'output-retention', 'compaction-basic',
+  // 2026-08 事故清单补全（其余 17 条已在上方）
+  'agent-teams', 'web-ui-remote-web-ui'
 ]);
 
-/** 是否受保护：命中名单，或属于 dsh 基础服务包。 */
-export function isProtected(rowId, pkgName) {
-  if (PROTECTED_IDS.has(rowId)) return true;
-  if (pkgName && /^@deepseek-ai\/(dsh-(base|web-app|client-runtime|client-connection|client-modules|api-remotes|host-apiproxy|host-webserver|session|agent|goal|subagent|workspace|settings|credentials|storage|sandbox|permission|approval|llm|jobs|terminal|code-runtime|client-hmr|web-app|web-frontend|typert|user-questions|attachment|compaction|spill|output-retention|scope|persona))$/.test(pkgName)) return true;
+/**
+ * 第 2 层：官方发行作用域。白名单不能只靠枚举——实测本机 profile 共 231 行，
+ * 仅 67 行命中 PROTECTED_IDS，另有 134 行官方包（tools / agent-loop / commands / skill /
+ * ui-chat / ui-conversation / web / mcp-resources …）完全裸奔，被误判一次就够毁掉对话。
+ * 官方包一律不自动禁用；新增官方插件自动获得保护，无需维护名单。
+ */
+export const PROTECTED_SCOPES = ['@deepseek-ai/'];
+
+/** 第 3 层：哨兵自身行——防止守卫把自己禁用掉（fixture 包不在此列，e2e 仍需能演示禁用）。 */
+export const SELF_PROTECTED_IDS = new Set(['error-tell-client-host', 'error-tell-runtime']);
+export const SELF_PROTECTED_PACKAGES = new Set([
+  '@dsh-error-tell/client-tell', '@dsh-error-tell/runtime-guard', '@dsh-error-tell/boot-guard', '@dsh-error-tell/core'
+]);
+
+/**
+ * 用户可追加的白名单：DSH_ERROR_TELL_PROTECT_EXTRA='id1,id2,@scope/,pkg'
+ * 以 `/` 结尾的条目按包名前缀匹配，其余按行 id 或包名精确匹配。每次调用读取，便于测试。
+ */
+export function extraProtected() {
+  const raw = process.env.DSH_ERROR_TELL_PROTECT_EXTRA;
+  if (!raw) return [];
+  return String(raw).split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function matchesExtra(rowId, pkgName) {
+  for (const p of extraProtected()) {
+    if (p.endsWith('/') ? (pkgName && pkgName.startsWith(p)) : (p === rowId || p === pkgName)) return true;
+  }
   return false;
+}
+
+/**
+ * 是否受保护（自动禁用闸门，宽松版）：命中 id 名单 / 官方作用域 / 哨兵自身 / cordis 分组结构行 / 用户追加。
+ * 供 recordFailure、boot-guard、runtime-guard 使用。手动禁用走 isManuallyProtected（窄名单）。
+ */
+export function isProtected(rowId, pkgName) {
+  if (rowId && (PROTECTED_IDS.has(rowId) || SELF_PROTECTED_IDS.has(rowId))) return true;
+  const name = pkgName == null ? '' : String(pkgName);
+  if (name.startsWith('cordis:')) return true;
+  if (SELF_PROTECTED_PACKAGES.has(name)) return true;
+  if (PROTECTED_SCOPES.some(s => name.startsWith(s))) return true;
+  if (/^@deepseek-ai\/(dsh-(base|web-app|client-runtime|client-connection|client-modules|api-remotes|host-apiproxy|host-webserver|session|agent|goal|subagent|workspace|settings|credentials|storage|sandbox|permission|approval|llm|jobs|terminal|code-runtime|client-hmr|web-app|web-frontend|typert|user-questions|attachment|compaction|spill|output-retention|scope|persona))$/.test(name)) return true;
+  return matchesExtra(rowId, name);
+}
+
+/**
+ * 手动禁用的闸门（窄名单）：只拦 PROTECTED_IDS + 哨兵自身。
+ * 人在设置页显式点「禁用」时，官方 UI 行等仍可由用户自行决定，故不套用宽名单。
+ */
+export function isManuallyProtected(rowId) {
+  if (!rowId) return false;
+  return PROTECTED_IDS.has(rowId) || SELF_PROTECTED_IDS.has(rowId);
 }
 
 /** pending 类错误（依赖未满足，不是插件自身失败）不归因不禁用。 */
