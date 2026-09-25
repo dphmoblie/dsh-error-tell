@@ -185,6 +185,14 @@
    → 把该逻辑抽到 `test/e2e/helpers.mjs` 的 `makePageFetch(server)` / `waitForWebReady(server)`，
    `verify-c.mjs` 与 `verify-s3c.mjs` 共用（顺带消化 P1-b 类重复实现）；`run` 不再使用，两个脚本的 import 一并收敛。
 
+7. **Phase H 的「谁先到」竞态**（CI run 36147631666，H 首次真正跑到）：失败信息是
+   `✖ FAIL: [H] 挂起超时熔断（exit 5, timedOut）—— exit=5` —— 退出码对、零副作用断言也过，
+   只有 `spawn.timedOut === true` 不成立。0.1.7-rc.2 上「挂起」有两种收场方式，取决于谁的看门狗先到：
+   守卫自己的进程级超时（`spawn={code:null,timedOut:true}`）或 dsh 自行异常退出（`spawn={code:<非0>,timedOut:false}`）。
+   → 用例要覆盖的是**守卫的兜底**那一支，故把 `--timeout-ms` 从 20 s 压到 **8 s**（明显小于 dsh 自己的看门狗 ≈20 s）消除竞态；
+   机制层另有单测 `packages/boot-guard/test/compose-timeout.test.mjs` 固定 `runDsh` 的 `timedOut` 分支，不再依赖 dsh 的挂起行为。
+   `verify-h.mjs` 同时在断言前打印 `parsed/exit/ok/spawn` 与 guard 输出尾部，避免下次只剩一句没有证据的 FAIL。
+
 时间预算：0.1.7-rc.2 下 D1/D2 的失败不再"秒退"，只能等守卫自己的超时窗口，故 `test/e2e/verify-d.mjs`
 把 D1/D2 的 `--timeout-ms` 从 90 s 降到 **30 s**、D3 的 quit 窗口从 90 s 降到 **60 s**（dry-run 的超时上限放到 240 s，
 本机实测该步骤 73 s：94 行逐行 import 干跑、并发 4）。整套 Phase D 由 444.7 s 降到 262.9 s。

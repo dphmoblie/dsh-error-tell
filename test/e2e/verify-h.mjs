@@ -47,9 +47,14 @@ const envH = { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' };
 linkProfile(profileH, { '@dsh-error-tell/fixture-bad-hang': 'packages/test-fixtures/bad-hang' });
 ok(true, '[H] 沙箱依赖已链接（junction）');
 
-// 上限 180 s：guard 自己的 20 s 熔断窗口只占小头，「逐行 import 干跑」预检（93 行、并发 4）在 CI 上约 25~30 s，
+// 上限 180 s：guard 自己的熔断窗口只占小头，「逐行 import 干跑」预检（93 行、并发 4）在 CI 上约 20~30 s，
 // 预检超时还会重试一次（+最多 20 s），90 s 余量偏紧。
-const gH = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1', '--timeout-ms', '20000'], { env: envH, timeoutMs: 180000 });
+//
+// 熔断窗口用 8 s（原先 20 s）：0.1.7-rc.2 上「挂起」有两种收场方式，取决于谁的看门狗先到——
+//   守卫自己的进程级超时（spawn={code:null,timedOut:true}）或 dsh 自行异常退出（spawn={code:<非0>,timedOut:false}）。
+// CI run 36147631666 正是后者：exit=5、零副作用都对，但 timedOut 不是 true ⇒ 断言假红。
+// 本用例要覆盖的是**守卫的兜底**那一支，所以把窗口压到明显小于 dsh 自己的看门狗（实测 ~20 s）即可消除竞态。
+const gH = await run('node', [BIN, 'guard', '--profile', 'web', '--port', '0', '--restart-limit', '1', '--timeout-ms', '8000'], { env: envH, timeoutMs: 180000 });
 const jH = parseLastJson(gH.stdout);
 // CI 上这条断言挂过一次，而日志里看不到 guard 的 JSON（本脚本只在 web 未就绪时 dump）——
 // 断言文案只能证明 exit=5，无法区分「jH 没解析出来 / ok 不是 false / timedOut 不是 true」。
