@@ -117,7 +117,21 @@
 | 状态 | 内容 |
 |---|---|
 | **已实测验证** | 单测 **103/103**（`pnpm test`，不涉及端口；含新增 `compose-timeout.test.mjs` 2 条，把 Phase H 依赖的「进程级超时 → `timedOut:true`」兜底分支固定在单测里，不再依赖 dsh 版本的挂起行为）；**`pnpm e2e:d`（Phase D）13/13 全绿，本机 262.9 s**，且同一提交在 CI 上 Phase C/D 均通过——它用的 profile `s2test` 只含 `@deepseek-ai/dsh-base`、不起 `dsh web`，故不受本地禁端口约束；另有**不开端口的 Phase E/G/H 复刻**（`.tmp/verify-e-noport.mjs`：`rows=93 issues=0 errors=0`、无 home patch、**无隔离账本**；`.tmp/verify-g-noport.mjs`：`attempts=3`、两个坏行都进 managed、账本 failCount=2；`.tmp/verify-h-noport.mjs`：`exit=5`、`spawn={code:null,timedOut:true}`、无 home patch、无隔离账本）；runtime-guard 的 import 归因修复（真实 dsh 0.1.5-alpha.1 全程跑通，账本从误报 `include` 变为正确归因 `fixture-bad-import`）；`dshInstall` 修复（`timer` 从"模块无法解析"变为无误报）；`quoteArg` 往返 6/6；web URL 解析、参数安全、**超时无孤儿进程**（见下） |
-| **已改但本地未验证** | 需要在 `dsh web` 上跑端到端断言的其余脚本（`pnpm e2e:c` / `e2e:efg` / `e2e:s3c` / `e2e:h`，均须绑定临时端口）；Phase D 在**旧 dsh**（0.1.0-rc.6，import 失败会终止进程）路径下也未复跑过 |
+| **已改但本地未验证** | 需要在 `dsh web` 上跑端到端断言的其余脚本（`pnpm e2e:c` / `e2e:efg` / `e2e:s3c` / `e2e:h`，均须绑定临时端口）——**本机跑不了，但已在 Windows CI 上通过**（见「Windows CI 实测结果」）；Phase D 在**旧 dsh**（0.1.0-rc.6，import 失败会终止进程）路径下也未复跑过 |
+
+### Windows CI 实测结果（dsh 0.1.7-rc.2，PR #1 分支 `ci/phase-c-diagnostics`）
+
+fast job = 单测 + 分段 e2e（C/D/EFG/S3/H），这才是 PR 上的必过检查：
+
+| CI run | sha | 结论 | 分段 e2e 明细 |
+|---|---|---|---|
+| [36147631666](https://github.com/dphmoblie/dsh-error-tell/actions/runs/36147631666) | `566069b` | ✗ | C ✓ / D ✓ / E+F+G ✓ / S3C ✓ / **H ✗**（`timedOut` 断言竞态，见上文第 7 点） |
+| [36149448693](https://github.com/dphmoblie/dsh-error-tell/actions/runs/36149448693) | `dac4a8f` | ✓ | C/D/E+F+G/S3C 各 `失败数: 0`；H 两条断言 ✔（`parsed=yes exit=5 ok=false spawn={"code":null,"quit":false,"timedOut":true}`） |
+| [36151197411](https://github.com/dphmoblie/dsh-error-tell/actions/runs/36151197411) | `d8b3700` | ✓ | 同上；H 仍是「守卫进程级超时」形态（8 s 窗口后不再看谁先到） |
+
+- fast job 实测耗时 **12 min 50 s**（`timeout-minutes: 40` 有余量）；ubuntu 跨平台单测 job 30 s。
+- 「全链路 e2e（A–H，手动触发）」仍是 `skipped`：它只在 `workflow_dispatch` 下跑，0.1.7-rc.2 上**从未跑过**（含 Phase A/B）。
+- 原始日志只在本机 `.tmp/ci/<sha>.log`（gitignored，不入库）；上表即随仓库保留的证据。
 
 ### 本轮：dsh 0.1.7-rc.2 适配（CI 从红转绿）
 
@@ -220,7 +234,7 @@ Phase E/F/G 与 H 的**用例上限（不是被测行为）**同步放宽，因�
 - **P2-b（部分可解）端口改造的验证证据**：把 `parseWebUrl()` 抽成纯函数并补样本测试
   （带 token + LAN 后缀、0.1.0-rc.6 无 token、不得误匹配 `dsh web: opening the default browser…` 提示行），
   这部分**不再依赖端口**即可验证。真正需要真实端口的仍是端到端断言，须在 Windows CI 上跑
-  `pnpm e2e:c` / `pnpm e2e:h` / `pnpm e2e:s3c` 并保留日志。
+  `pnpm e2e:c` / `pnpm e2e:h` / `pnpm e2e:s3c` 并保留日志 → **已于 Windows CI 跑通（见「Windows CI 实测结果」）**。
   另补**超时无孤儿进程**回归测试（子进程拉起写心跳的孙进程 → 超时后心跳必须停止），
   直接锁住 P1-a 的修复，且不需要端口。
 - **P2-c（评审此条部分不准确）发布元数据**：核实后，三包**早已具备**
@@ -334,7 +348,7 @@ Phase E/F/G 与 H 的**用例上限（不是被测行为）**同步放宽，因�
 - [x] DSH 版本护栏 + 能力自检 → `capabilityReport()` + `detectDshVersion()`
 - [ ] 发布顺序 boot-guard → client-tell（`file:` 改 registry 版本）
 - [ ] 版本策略（changesets 可选）
-- [ ] **Windows CI 实测 `pnpm e2e:c` / `pnpm e2e:h` / `pnpm e2e:s3c` 并保留日志**（本地端口受限，见上文「本地验证状态」）
+- [x] **Windows CI 实测 `pnpm e2e:c` / `pnpm e2e:h` / `pnpm e2e:s3c` 并保留日志**（本地端口受限）→ 已跑通，见「Windows CI 实测结果」；因 `pnpm e2e:h` 暴露的竞态另修了 `verify-h.mjs` 的超时窗口（上文第 7 点）
 - [ ] **决定嵌套仓库的 Gitleaks 门禁**：`dsh-error-tell` 未设 `core.hooksPath`，根仓库 hook 不生效；且本机未装 gitleaks
 
 ## 测试盲区
@@ -342,7 +356,7 @@ Phase E/F/G 与 H 的**用例上限（不是被测行为）**同步放宽，因�
 - ~~maxDisable 累计自锁~~ → 已补（熔断增量语义回归 ×1）
 - ~~inferFailures 误报用例~~ → 已补（id 前缀碰撞 ×4）
 - ~~web URL 解析 / 参数安全 / 超时孤儿进程~~ → 已补（e2e 辅助 ×7）
-- [ ] Windows CI 上的端到端证据（端口受限，本地无法覆盖）
+- ~~Windows CI 上的端到端证据（端口受限，本地无法覆盖）~~ → fast job 已在 Windows CI 上跑 C/D/EFG/S3/H（见「Windows CI 实测结果」）；**仍缺**：手动全链路 job（A–H）在 0.1.7-rc.2 上的结果（Phase A/B 从未在该版本跑过）
 - [ ] restore 后真实重启 dsh（S1 修复后应补）
 - [ ] 端点 400/403/404/405/超大 body/重复禁用/坏 token
 - [ ] 注入脚本在真实失败加载页渲染（Playwright）
