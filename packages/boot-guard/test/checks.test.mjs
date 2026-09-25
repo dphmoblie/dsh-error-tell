@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runChecks, clearImportCache, hasHostEntry, isTargetUnresolved, checkImport } from '../src/checks.mjs';
+import { runChecks, clearImportCache, hasHostEntry, isTargetUnresolved, resolutionNames, checkImport } from '../src/checks.mjs';
 
 /** 造一个可被 createRequire/import 解析的假包。 */
 function mkPkg(rootDir, name, files) {
@@ -124,6 +124,27 @@ test('isTargetUnresolved：只有「目标包本身找不到」才算，内部�
   assert.equal(isTargetUnresolved(realTarget, '@x/target'), true, '真的缺失时仍必须回退');
 });
 
+// ---------- P1-3 补丁：子路径 spec（@scope/pkg/sub，如 dsh-base 的 …-subagent-control/list-agents） ----------
+test('isTargetUnresolved：行 name 带子路径时，Node 报的是包根名也必须判为「目标解析不到」', () => {
+  // 真实形态：name = '@deepseek-ai/dsh-tool-subagent-control/list-agents'，
+  // 包缺失时 Node 只把**包根名**放进引号 → 只比对完整 spec 会漏判 → 不回退 → 官方行被误报。
+  const real = "Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@deepseek-ai/dsh-tool-subagent-control' imported from C:\\tmp\\profiles\\s2g\\[eval1]";
+  assert.equal(isTargetUnresolved(real, '@deepseek-ai/dsh-tool-subagent-control/list-agents'), true);
+  assert.equal(isTargetUnresolved("Cannot find module 'plain-pkg'", 'plain-pkg/sub'), true);
+
+  // 不得放宽：内部传递依赖缺失时报的是**别的**包名，两个候选都命中不了。
+  const transitive = "Cannot find package 'lodash' imported from /p/node_modules/@x/target/index.js";
+  assert.equal(isTargetUnresolved(transitive, '@x/target/sub'), false, '内部依赖缺失仍不得回退');
+});
+
+test('resolutionNames：完整 spec + 带子路径时的包根名', () => {
+  assert.deepEqual(resolutionNames('@a/b/c'), ['@a/b/c', '@a/b']);
+  assert.deepEqual(resolutionNames('@a/b'), ['@a/b']);
+  assert.deepEqual(resolutionNames('a/b'), ['a/b', 'a']);
+  assert.deepEqual(resolutionNames('plain'), ['plain']);
+  assert.deepEqual(resolutionNames(''), ['']);
+});
+
 test('checkImport：profile 内目标包存在但内部依赖缺失时不得回退到 dshInstall（P1-3 端到端回归）', async () => {
   const root = mkdtempSync(join(tmpdir(), 'det-fallback-'));
   const profileDir = join(root, 'profile');
@@ -179,6 +200,32 @@ test('checkImport：正常包判成功；挂起包走上限超时且不挂死（
   const started = Date.now();
   const res = await checkImport('@x/hang', [root], 1500);
   assert.equal(res.stage, 'timeout', '挂起包必须报 timeout');
+  assert.match(String(res.error), /重试 1 次后仍超时/, '两次都超时才上报，错误里应写明重试过');
   assert.ok(Date.now() - started < 15000, '不应挂死（实际 ' + (Date.now() - started) + 'ms）');
   rmSync(root, { recursive: true, force: true });
+});
+
+test('checkImport：首次超时后重试一次（负载抖动的假失败不得凭空记账/禁用）', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'det-retry-'));
+  const marker = join(root, 'hang-marker');
+  writeFileSync(marker, '1');
+  // 模块只在 marker 存在时挂起：第一次超时后由测试删掉 marker，重试即成功。
+  mkPkg(root, '@x/flaky', {
+    code: "import { existsSync } from 'node:fs';\n" +
+      "if (existsSync(process.env.DET_TEST_HANG_MARKER)) await new Promise(r => setTimeout(r, 60000));\n" +
+      'export default {};\n'
+  });
+  const prev = process.env.DET_TEST_HANG_MARKER;
+  process.env.DET_TEST_HANG_MARKER = marker;
+  try {
+    const p = checkImport('@x/flaky', [root], 1500);
+    // 关键时序：第一次尝试在 t≈300ms 读到 marker（挂起），marker 必须在 1500ms 那次超时**之前**删除，
+    // 这样重试（t≈1500ms 起）才读到「无 marker」并成功。删太晚会让重试也挂起 → 假失败。
+    setTimeout(() => rmSync(marker, { force: true }), 700);
+    const res = await p;
+    assert.equal(res.ok, true, '第一次超时后必须重试，marker 消失后应判成功');
+  } finally {
+    if (prev === undefined) delete process.env.DET_TEST_HANG_MARKER; else process.env.DET_TEST_HANG_MARKER = prev;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

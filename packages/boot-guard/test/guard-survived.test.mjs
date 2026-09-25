@@ -83,6 +83,40 @@ test('guard 成功路径：进程存活但探针行未激活 → 不恢复、保
   } finally { cleanup(); }
 });
 
+test('guard 成功路径：归因禁用后重启一次，交付干净实例（Phase G 回归）', async () => {
+  // dsh 0.1.7-rc.2 上 apply 阶段抛错同样只打 warning（进程存活），实测 stderr：
+  //   dsh: warning: 1 entry did not activate
+  //   fixture-bad-apply (@dsh-error-tell/fixture-bad-apply): Error: … apply 阶段抛错（用于测试）
+  // 预检只干跑 import，抓不到 apply 失败 → 必须靠存活归因在运行期发现，并重启交付干净实例。
+  const { home, cleanup } = makeHome();
+  try {
+    const patchPath = homePatchPath(dshHome({ DSH_HOME: home }));
+    // 账本里已有 1 次失败（预检记的），本次存活归因即第 2 次 → 达阈值 → 本次禁用
+    addQuarantine(home, { rowId: BAD, package: BAD_PKG, stage: 'import', error: 'boom', source: 'boot-guard' });
+
+    const logs = [];
+    const deps = {
+      profile: 's2test', env: { ...process.env, DSH_HOME: home },
+      dshBin: 'dsh', importChecks: false, restartLimit: 2, quitAfterMs: 90000, timeoutMs: 120000,
+      dshInstall: join(home, 'fake-dsh'),
+      dshRun: fakeDshRun(WARNING), // 第 1 次启动带告警，之后干净
+      compose: async () => ({ rows: [{ id: BAD, name: BAD_PKG }], issues: [] }),
+      log: (m) => logs.push(m)
+    };
+
+    const res = await guard(deps);
+    assert.equal(res.attempts, 2, '归因禁用后必须重启一次（第一次是「活着但坏」的实例）');
+    assert.deepEqual(res.disabled, [BAD]);
+    const patch = readFileSync(patchPath, 'utf8');
+    assert.match(patch, /- id: fixture-bad-import/, '坏行写入 managed');
+    assert.match(patch, /disabled: true/);
+    assert.ok(logs.some(l => l.includes('重启一次以交付干净实例')), '须明确记录重启原因');
+    const entry = loadLedger(home).entries.find(e => e.rowId === BAD);
+    assert.equal(entry.failCount, 2);
+    assert.equal(entry.restoredAt, undefined, '不得被误标恢复');
+  } finally { cleanup(); }
+});
+
 test('guard 成功路径：普通行未激活 → 记入账本（source=boot-guard-survived-boot），未达阈值不禁用', async () => {
   const { home, cleanup } = makeHome();
   try {

@@ -116,7 +116,7 @@
 
 | 状态 | 内容 |
 |---|---|
-| **已实测验证** | 单测 **97/97**（`pnpm test`，不涉及端口）；**`pnpm e2e:d`（Phase D）13/13 全绿，本机 262.9 s**——它用的 profile `s2test` 只含 `@deepseek-ai/dsh-base`、不起 `dsh web`，故不受本地禁端口约束（见下节）；runtime-guard 的 import 归因修复（真实 dsh 0.1.5-alpha.1 全程跑通，账本从误报 `include` 变为正确归因 `fixture-bad-import`）；`dshInstall` 修复（`timer` 从"模块无法解析"变为无误报）；`quoteArg` 往返 6/6；web URL 解析、参数安全、**超时无孤儿进程**（见下） |
+| **已实测验证** | 单测 **101/101**（`pnpm test`，不涉及端口）；**`pnpm e2e:d`（Phase D）13/13 全绿，本机 262.9 s**，且同一提交在 CI（run 36142990930）上 Phase C/D 均通过——它用的 profile `s2test` 只含 `@deepseek-ai/dsh-base`、不起 `dsh web`，故不受本地禁端口约束；另有**不开端口的 Phase E/G 复刻**（`.tmp/verify-e-noport.mjs`：`rows=93 issues=0 errors=0`、无 home patch、**无隔离账本**；`.tmp/verify-g-noport.mjs`：`attempts=3`、两个坏行都进 managed、账本 failCount=2）；runtime-guard 的 import 归因修复（真实 dsh 0.1.5-alpha.1 全程跑通，账本从误报 `include` 变为正确归因 `fixture-bad-import`）；`dshInstall` 修复（`timer` 从"模块无法解析"变为无误报）；`quoteArg` 往返 6/6；web URL 解析、参数安全、**超时无孤儿进程**（见下） |
 | **已改但本地未验证** | 需要在 `dsh web` 上跑端到端断言的其余脚本（`pnpm e2e:c` / `e2e:efg` / `e2e:s3c` / `e2e:h`，均须绑定临时端口）；Phase D 在**旧 dsh**（0.1.0-rc.6，import 失败会终止进程）路径下也未复跑过 |
 
 ### 本轮：dsh 0.1.7-rc.2 适配（CI 从红转绿）
@@ -146,6 +146,36 @@
    非探针行失败则记账 `source: 'boot-guard-survived-boot'`。归因/熔断逻辑收敛到闭包 `attributeFailure()`，
    新增 `rewriteProbe()`。回归测试 `packages/boot-guard/test/guard-survived.test.mjs`（3 条，含 D3 场景）；
    `guard()` 增加 `dshRun` / `compose` 注入缝，使该分支无需 spawn/端口即可覆盖。
+
+3. **apply 阶段失败同样只打 warning**（实测：`dsh: warning: 1 entry did not activate` +
+   `fixture-bad-apply (@dsh-error-tell/fixture-bad-apply): Error: … apply 阶段抛错（用于测试）`，进程 30 s 不退出）。
+   预检只干跑 import，抓不到 apply 失败 → 只能靠「存活归因」在运行期发现；但旧成功路径一旦归因禁用就立刻 `break` 结束，
+   返回的 `ok=true` 其实是「少一行 / 坏一行」的实例（禁用要下一次启动才生效）。
+   → 存活归因**新增禁用后按 `restartLimit` 追加一次重启**再交付（与失败路径同一语义，日志 `已归因禁用 … ，重启一次以交付干净实例`）；
+   `--restart-limit 0` 时只记账、提示下次启动生效，不额外重启。
+   回归测试：`packages/boot-guard/test/guard-survived.test.mjs` 第 3 条（Phase G 语义，无需 spawn/端口）。
+   本地复刻真实 dsh（`.tmp/verify-g-noport.mjs`：同一组坏插件，但 profile 只含 `@deepseek-ai/dsh-base`、不起 web、不开端口）
+   结果 `ok=true, attempts=3, disabled=[fixture-bad-import, fixture-bad-apply]`，managed 段两行 `disabled: true`，
+   账本两条 `failCount=2`（source `boot-guard-survived-boot`）——与 Phase G 的断言逐条对应。
+
+4. **预检把官方子路径行误判为 import 失败**（`packages/boot-guard/src/checks.mjs`）：
+   `dsh-base` 里有一行 `name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'`（**子路径 spec**）。
+   预检先在 profile 目录干跑 import；e2e 沙箱**不链接**官方包（`linkOfficialDsh()` 只在设了 `DET_DSH_PREFIX` 时生效），
+   所以官方行本该回退到 dshInstall 锚点再干跑一次 —— 但 `isTargetUnresolved()` 只拿**完整 spec** 去匹配
+   `Cannot find package '<x>'`，而 Node 在引号里放的永远是**包根名**（`'@deepseek-ai/dsh-tool-subagent-control'`，不含 `/list-agents`）
+   → 匹配不上 → 不回退 → 报 `[error/import] … Cannot find package '@deepseek-ai/dsh-tool-subagent-control'`。
+   后果不只是测试红：该行属保护名单，**只记账**，于是在一个完全干净的 profile 上凭空写出隔离账本
+   （CI 的 `[E] 未创建隔离账本（零副作用）` 失败、`[G] 账本含 2 条活动中记录` 变成 3 条，都是这一条引起的）。
+   → 新增导出 `resolutionNames(name)`（完整 spec + 带子路径时的包根名），`isTargetUnresolved` 在候选集上逐个匹配；
+   P1-3 的判据不变（内部传递依赖缺失时报的是**别的**包名，两个候选都命中不了）。
+   实测：修复前 `isTargetUnresolved(子路径报错) = false`，修复后 `checkImport(profile → dshInstall) = {ok:true}`；
+   单测 `packages/boot-guard/test/checks.test.mjs` +2 条（子路径判定、`resolutionNames`）。
+
+5. **预检超时是负载抖动的假失败**：一次干跑要并发起 ~90 个 node 进程，机器临时繁忙时单行会撞上 20 s 上限
+   （本机实测出现过 `[error/timeout] repeat-tool-reminder: import 超时(20000ms)`，但单独导入同一包只需 35 ms）。
+   超时会被记成「该行失败」——官方行凭空写账本、第三方行最终被误禁用。
+   → `checkImport()` 同一锚点**重试一次**，两次都超时才上报（错误文案写明「重试 1 次后仍超时」）；
+   被放弃的旧进程标记 `abandoned`，其 exit/error 事件不再进入判定。回归测试 +1 条（marker 控制「首次挂起、重试成功」）。
 
 时间预算：0.1.7-rc.2 下 D1/D2 的失败不再"秒退"，只能等守卫自己的超时窗口，故 `test/e2e/verify-d.mjs`
 把 D1/D2 的 `--timeout-ms` 从 90 s 降到 **30 s**、D3 的 quit 窗口从 90 s 降到 **60 s**（dry-run 的超时上限放到 240 s，

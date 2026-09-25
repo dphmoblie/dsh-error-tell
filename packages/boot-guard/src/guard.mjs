@@ -321,6 +321,7 @@ export async function guard(opts = {}) {
         let dirty = false;
         // 启动「成功」也要看 stderr：0.1.7-rc.2 起未激活的行不会终止进程（详见 splitUnactivated 注释）
         const survived = splitUnactivated(last.stderr || '', rows, { probeIds, known: toDisableNow });
+        const newlyDisabled = [];
         if (survived.ids.length) {
           log('[dsh-error-tell] 进程存活但 ' + survived.ids.length + ' 行未激活（stderr 归因）: ' + survived.ids.join(', '));
           for (const id of survived.probe) {
@@ -328,7 +329,10 @@ export async function guard(opts = {}) {
             log('[dsh-error-tell]   ' + id + '（探针行仍未激活，保持禁用）');
           }
           for (const id of survived.others) {
-            if (attributeFailure(id, { source: 'boot-guard-survived-boot', error: '进程存活但该行未激活（stderr 归因）' })) dirty = true;
+            if (attributeFailure(id, { source: 'boot-guard-survived-boot', error: '进程存活但该行未激活（stderr 归因）' })) {
+              dirty = true;
+              newlyDisabled.push(id);
+            }
           }
         }
         // 探针行其实没激活 → 不能恢复。剔除探针后再做一次干净启动，
@@ -341,6 +345,15 @@ export async function guard(opts = {}) {
           newFailures = survived.probe;
           continue;
         }
+        // 归因新增禁用 → 也要重启一次：0.1.7-rc.2 上「应用/导入失败但进程活着」的实例是坏实例，
+        // 若就此返回 ok，用户拿到的是少一行/坏一行的服务（下一轮才会生效）。与失败路径语义一致。
+        if (newlyDisabled.length && attempt < restartLimit) {
+          log('[dsh-error-tell] 已归因禁用 ' + newlyDisabled.join(', ') + '（' + attempt + '/' + restartLimit + '），重启一次以交付干净实例');
+          writeManaged(patchPath, new Set([...managedIds, ...toDisableNow]));
+          newFailures = newlyDisabled;
+          continue;
+        }
+        if (newlyDisabled.length) log('[dsh-error-tell] 已归因禁用 ' + newlyDisabled.join(', ') + '，但重启次数已用尽（' + attempt + '/' + restartLimit + '），下次启动生效');
         // 探针成功 → 自动恢复：只恢复「本次未归因失败」的探针行（仍坏的行保持禁用）
         const restoreIds = new Set([...probeIds].filter(id => !probeFailed.has(id)));
         if (restoreIds.size) {
