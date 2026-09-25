@@ -87,7 +87,9 @@ for (let i = 0; i < 10; i++) {
   try { html2 = await (await pageFetch()).text(); } catch {}
   if (!html2.includes('fixture-bad-client')) break;
 }
-ok(!html2.includes('fixture-bad-client'), '[C] 禁用后组合图排除坏行');
+// html2 必须真的取到页面：pageFetch 全程失败时 html2 是空串，
+// 原来的 `!html2.includes(...)` 会恒真 —— 这是一条假通过（9-25 那次 Phase C 就是它给的绿灯）。
+ok(html2.length > 0 && !html2.includes('fixture-bad-client'), '[C] 禁用后组合图排除坏行');
 // /plugins 端点：设置页「错误哨兵」数据源（读取全部插件 + 手动禁用状态）
 const plC = await fetch(origin() + '/api/error-tell/plugins', { headers: { 'x-dsh-error-tell': '1', 'x-dsh-error-token': 'test-token' } }).then(r2 => r2.json()).catch(e => ({ error: e.message }));
 const recP = (plC.plugins || []).find(x => x.rowId === 'fixture-bad-client');

@@ -116,8 +116,40 @@
 
 | 状态 | 内容 |
 |---|---|
-| **已实测验证** | 单测 **62/62**（`pnpm test`，不涉及端口）；runtime-guard 的 import 归因修复（真实 dsh 0.1.5-alpha.1 全程跑通，账本从误报 `include` 变为正确归因 `fixture-bad-import`）；`dshInstall` 修复（`timer` 从"模块无法解析"变为无误报）；`quoteArg` 往返 6/6；web URL 解析、参数安全、**超时无孤儿进程**（见下） |
-| **已改但本地未验证** | 各 e2e 脚本需要在 `dsh web` 上跑端到端断言（绑定临时端口）。其中 `pnpm e2e:c` 在端口被禁用**之前**曾 17/17 通过；统一辅助模块重构后未再复跑 |
+| **已实测验证** | 单测 **97/97**（`pnpm test`，不涉及端口）；**`pnpm e2e:d`（Phase D）13/13 全绿，本机 262.9 s**——它用的 profile `s2test` 只含 `@deepseek-ai/dsh-base`、不起 `dsh web`，故不受本地禁端口约束（见下节）；runtime-guard 的 import 归因修复（真实 dsh 0.1.5-alpha.1 全程跑通，账本从误报 `include` 变为正确归因 `fixture-bad-import`）；`dshInstall` 修复（`timer` 从"模块无法解析"变为无误报）；`quoteArg` 往返 6/6；web URL 解析、参数安全、**超时无孤儿进程**（见下） |
+| **已改但本地未验证** | 需要在 `dsh web` 上跑端到端断言的其余脚本（`pnpm e2e:c` / `e2e:efg` / `e2e:s3c` / `e2e:h`，均须绑定临时端口）；Phase D 在**旧 dsh**（0.1.0-rc.6，import 失败会终止进程）路径下也未复跑过 |
+
+### 本轮：dsh 0.1.7-rc.2 适配（CI 从红转绿）
+
+背景：CI 曾整体变红，根因是上游 **2026-09-22T15:36–39Z 锁步发布**（cordis 4.0.4 / cordis-plugin-hmr 1.0.19 / loader 1.0.5 / timer 1.1.6 / include 1.0.9）。
+`dsh@0.1.0-rc.6` 声明 `cordis-plugin-hmr: ^1.0.16`（stable caret，`npm i -g` 无 lockfile 钉不住），
+而它启动后**无条件**装载 HMR 服务并调用 `watchUserPatches`，装不上就抛
+`dsh: user patch-layer watching requires the Cordis HMR service` 并 exit 1 → 任何 profile 都起不来。
+→ CI 的 dsh pin 由 `0.1.0-rc.6` 改为 `0.1.7-rc.2`（该代已重构 HMR 引导，不再需要该服务），并新增「记录 dsh 与 cordis 依赖版本」诊断步骤。
+
+换 pin 后 Phase D 暴露出**两个真实缺陷**（都不是测试写法问题）：
+
+1. **dsh launcher 参数段被截断**（`packages/boot-guard/src/guard.mjs`）：`dsh/lib/bin.js` 的契约是 launcher 只认自己的 flag，
+   遇到第一个非自家 flag 就把**后面全部参数原样交给 app**。旧代码把 `--no-open`（web app 的 flag）排在 `--patch` 之前，
+   于是 `--patch`（用户覆盖层 + 探针层）**完全没被 launcher 收集**，静默丢弃。
+   实测：`dsh --profile s2test --dump-config --no-open --patch probe.yml` →
+   `error: config dumps take no app arguments, got "--no-open" "--patch" …`。
+   → 新增导出纯函数 `buildDshArgs({profile, patchFiles, probePatchFile, port, quitAfterMs, extraArgs})`：
+   launcher 段在前（`--profile` + 全部 `--patch`，探针最后=优先级最高），app 段在后（`--no-open` / `--port` / extraArgs）。
+   回归测试 `packages/boot-guard/test/guard-argv.test.mjs`（7 条，含复刻 launcher 截断规则的 `launcherParse`）。
+
+2. **「进程存活」被当成「启动成功」，误恢复从未验证修好的坏行**：dsh 0.1.7-rc.2 起插件 import 失败**不再终止进程**，
+   只打一行 `dsh: warning: 1 entry did not activate … failed to import`。
+   旧成功分支只看退出码/quit 钩子，于是带探针启动（行被临时启用 → 仍 import 失败但进程活着）被判成功 →
+   `restoreQuarantine` 撤销一个从未验证的禁用行（在旧 dsh 上 import 失败是致命的，只看退出码足够）。
+   → 新增 `splitUnactivated(stderr, rows, {probeIds, known})` 按 stderr 归因：探针行失败则**剔除探针、保持禁用**并追加一次干净启动；
+   非探针行失败则记账 `source: 'boot-guard-survived-boot'`。归因/熔断逻辑收敛到闭包 `attributeFailure()`，
+   新增 `rewriteProbe()`。回归测试 `packages/boot-guard/test/guard-survived.test.mjs`（3 条，含 D3 场景）；
+   `guard()` 增加 `dshRun` / `compose` 注入缝，使该分支无需 spawn/端口即可覆盖。
+
+时间预算：0.1.7-rc.2 下 D1/D2 的失败不再"秒退"，只能等守卫自己的超时窗口，故 `test/e2e/verify-d.mjs`
+把 D1/D2 的 `--timeout-ms` 从 90 s 降到 **30 s**、D3 的 quit 窗口从 90 s 降到 **60 s**（dry-run 的超时上限放到 240 s，
+本机实测该步骤 73 s：94 行逐行 import 干跑、并发 4）。整套 Phase D 由 444.7 s 降到 262.9 s。
 
 ### 第二轮评审（P1/P2）修复
 

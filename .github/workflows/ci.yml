@@ -16,7 +16,10 @@ jobs:
   fast:
     name: 单元测试 + 分段 e2e（C/D/EFG/S3/H）
     runs-on: windows-latest
-    timeout-minutes: 25
+    # 40 分钟：dsh 0.1.7-rc.2 起「插件 import 失败不再终止进程」，
+    # Phase D 的每个失败窗口/quit 窗口都要跑满（本机实测整套 D ≈ 4.4 min），
+    # 后面还有 EFG/S3C/H 从未在 CI 跑过，留足余量避免误判为超时失败。
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -75,7 +78,7 @@ jobs:
     name: 全链路 e2e（A-H，手动触发）
     if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60   # 全链路含 Phase A-H，其中 D 在 0.1.7-rc.2 上单独就要 ~5 min
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
